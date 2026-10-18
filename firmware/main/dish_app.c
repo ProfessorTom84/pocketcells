@@ -161,8 +161,9 @@ static void dish_task(void *arg) {
         float dt = (now - last) / 1e6f; last = now; if (dt > 0.25f) dt = 0.25f;
         if (s_pmic && battery_port_key_poll() == 1) power_off();
         imu_port_poll(now);
+        bool inv = false;
 #ifndef TANK_WATCH                              /* worn on a wrist, the picture never follows the arm */
-        bool inv = imu_port_inverted();
+        inv = imu_port_inverted();
         display_port_set_inverted(inv);
         touch_port_set_inverted(inv);
 #endif
@@ -174,6 +175,7 @@ static void dish_task(void *arg) {
         was_down = down;
         {   /* the box's tilt is gravity in the dish (a dead zone, so a desk that isn't level stays still) */
             float tx, ty; imu_port_tilt(&tx, &ty);
+            if (inv) { tx = -tx; ty = -ty; }             /* (the picture turned over: so is its down) */
             tx = fabsf(tx) < 0.12f ? 0 : tx * 1.6f; ty = fabsf(ty) < 0.12f ? 0 : ty * 1.6f;
             dish_set_tilt(dish, tx, ty);
         }

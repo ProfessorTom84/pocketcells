@@ -1067,6 +1067,21 @@ static int selftest_play(void) {
     {   bool told = false; char l[96]; int mn;
         for (int i = 0; i < dish_story_count(&dish) && dish_story_line(&dish, i, l, sizeof l, &mn); i++) if (strstr(l, "WAVE")) told = true;
         CHECK(told, "the wave is not in the story"); }
+    /* a wave announced, then the colony gone before it comes: called off, nothing arrives */
+    {   int w1 = ev_count[DEV_WAVE]; dish.wave_cd = 1e9f;
+        int vib0 = 0; for (int i = 0; i < DISH_MAX_CELLS; i++) vib0 += dish.cell[i].species == SP_VIBRIO && dish.cell[i].state == CS_LIVE;
+        dish_wave_start(&dish, 2, SP_VIBRIO); kill_pet(); run(&dish, WAVE_WARN_S + 1, 0, false);
+        int vib1 = 0; for (int i = 0; i < DISH_MAX_CELLS; i++) vib1 += dish.cell[i].species == SP_VIBRIO && dish.cell[i].state == CS_LIVE;
+        bool came = vib1 > vib0;
+        CHECK(dish.wave.on == WAVE_NONE && !came && ev_count[DEV_WAVE] == w1 + 2, "a wave came at a dish with no colony (on %d, came %d)", dish.wave.on, came); }
+    /* the setup's demo dish earns nothing: no DNA, badges, requests or visitors carry over */
+    {   dish_init(&dish, 115, SP_BACILLUS, "BLIP"); dish_ui_init(&ui); dish_ui_begin_setup(&ui);
+        uint32_t dna = dish.dna, badges = dish.badges; int q1 = ev_count[DEV_QUEST], v1 = ev_count[DEV_VISIT];
+        run(&dish, 200, 15, false);
+        CHECK(dish.dna == dna && dish.badges == badges && ev_count[DEV_QUEST] == q1 && ev_count[DEV_VISIT] == v1,
+              "the setup's demo dish earned %u DNA, badges %08x, %d requests, %d visitors", dish.dna - dna, dish.badges, ev_count[DEV_QUEST] - q1, ev_count[DEV_VISIT] - v1);
+        ui.setup = 0; run(&dish, 0.1f, 0, false);
+        CHECK(!dish.demo, "the dish stayed a demo after the setup"); }
     /* the director: on its own, a lazy dish gets requests and a wave */
     dish_init(&dish, 113, SP_COCCUS, "DOT"); dish_ui_init(&ui); dish.run_muts = 1;
     int q0 = ev_count[DEV_QUEST], wv0 = ev_count[DEV_WAVE];

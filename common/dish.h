@@ -204,6 +204,7 @@ typedef struct {
     float wave_cd;
     uint16_t quests_won, waves_won;
     uint32_t hints;               /* first-time hints already shown (dish_ui.c), saved */
+    uint8_t demo;                 /* the dish behind the first-run setup: it lives, but earns and asks nothing (not saved) */
 } dish_t;
 
 typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);
@@ -262,7 +263,7 @@ float dish_cell_radius(const cell_t *c);
 enum { DEV_FEED, DEV_DIVIDE, DEV_POP, DEV_BURST, DEV_INFECT, DEV_EXTINCT, DEV_RESPAWN, DEV_OUTBREAK, DEV_STRAT, DEV_BADGE,
        DEV_VISIT, DEV_VISIT_GONE, DEV_GIFT, DEV_DRAFT, DEV_RUN_OVER, DEV_ZAP, DEV_BLOOM, DEV_MEET, DEV_QUEST, DEV_WAVE, DEV_COUNT };
 /* DEV_MEET: strain = a * 8 + b, two strains whose cells touched (they talk); DEV_QUEST: strain = the quest's state;
- * DEV_WAVE: strain = 1 announced, 2 begun, 3 over */
+ * DEV_WAVE: strain = 1 announced, 2 begun, 3 over, 0 called off */
 /* DEV_BADGE: strain = the badge; DEV_VISIT / DEV_VISIT_GONE: strain = the species; DEV_GIFT: a free card (gene transfer) */
 typedef void (*dish_event_fn)(int ev, int strain, void *ud);
 void dish_events_set(dish_event_fn fn, void *ud);

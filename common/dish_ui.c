@@ -212,7 +212,7 @@ void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain) {
     case DEV_ZAP:      sfx(u, SND_SNIP, 420, 0.5f); break;
     case DEV_MEET:     sfx(u, SND_BUBBLES, 420, 1.5f); break;
     case DEV_QUEST:    sfx(u, strain == QS_WON ? SND_MILESTONE : strain == QS_ON ? SND_BEG : SND_ERROR, 300, 0); break;
-    case DEV_WAVE:     sfx(u, strain == 1 ? SND_SPOOK : strain == 3 ? SND_STAGE_UP : SND_ERROR, strain == 1 ? 180 : 256, 0); break;
+    case DEV_WAVE:     if (strain) sfx(u, strain == 1 ? SND_SPOOK : strain == 3 ? SND_STAGE_UP : SND_ERROR, strain == 1 ? 180 : 256, 0); break;
     case DEV_BLOOM:    sfx(u, SND_MILESTONE, 380, 0); break;
     }
     switch (ev) {
@@ -308,6 +308,7 @@ static void hints_tick(dish_ui_t *u, dish_t *d, float dt) {
 
 void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
     u->clock += dt;
+    d->demo = u->setup != 0;                         /* (dish_new_run at the setup's end clears it too) */
     for (int k = 0; k < 32; k++) if (u->snd_cd[k] > 0) u->snd_cd[k] -= dt;
     const strain_t *pet = &d->strain[DISH_PET];
     if (d->run_over && !u->setup) { u->page = PAGE_RUNOVER; u->lens = -1; }

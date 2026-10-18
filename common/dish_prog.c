@@ -34,7 +34,7 @@ int dish_unl_for_species(species_t sp) {
 
 void dish_prog_care(dish_t *d, int kind) {
     const strain_t *pet = &d->strain[DISH_PET];
-    if (d->care_cd > 0 || pet->count == 0) return;
+    if (d->demo || d->care_cd > 0 || pet->count == 0) return;
     bool needed = kind == CARE_FEED ? pet->energy < 0.4f : kind == CARE_CLEAN ? pet->filth > 0.12f : pet->infected > 0;
     if (!needed) return;
     d->dna += kind == CARE_CURE ? 3 : 2;
@@ -49,6 +49,7 @@ static void award(dish_t *d, int b) {
 }
 
 void dish_prog_tick(dish_t *d, float dt) {
+    if (d->demo) return;                              /* (the setup's demo: no badges, DNA, requests, waves or visitors to carry over) */
     dish_quest_tick(d, dt);
     if (d->care_cd > 0) d->care_cd -= dt;
     const strain_t *pet = &d->strain[DISH_PET];

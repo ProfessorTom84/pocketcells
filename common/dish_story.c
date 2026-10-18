@@ -47,7 +47,7 @@ void dish_story_tick(dish_t *d, float dt) {
     if (d->m_deaths[cause] >= 6) dish_story_note(d, SE_LOSS, pet->species, 0, cause, d->m_deaths[cause]);
     int i = d->series_head;
     d->series[i].pet = (uint8_t)(pet->count > 255 ? 255 : pet->count);
-    int others = d->n_live - pet->count; if (others < 0) others = 0;
+    int others = 0; for (int s = 1; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used) others += d->strain[s].count;
     d->series[i].others = (uint8_t)(others > 255 ? 255 : others);
     d->series[i].food = (uint8_t)fminf(255, cells ? food / cells * 600 : 0);
     d->series[i].births = (uint8_t)(d->m_births > 255 ? 255 : d->m_births);

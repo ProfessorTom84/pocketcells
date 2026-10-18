@@ -104,7 +104,10 @@ void dish_quest_tick(dish_t *d, float dt) {
     const strain_t *pet = &d->strain[DISH_PET];
     bool alive = pet->count > 0 && !d->run_over;
     /* the wave */
-    if (d->wave.on == WAVE_COMING) { if ((d->wave.t -= dt) <= 0) wave_arrive(d); }
+    if (d->wave.on == WAVE_COMING) {
+        if (!alive) { d->wave.on = WAVE_NONE; d->wave_cd = dish_rand(d, 120, 200); dish_emit(DEV_WAVE, 0); }   /* (no one left to attack: called off) */
+        else if ((d->wave.t -= dt) <= 0) wave_arrive(d);
+    }
     else if (d->wave.on == WAVE_ON) { if ((d->wave.t -= dt) <= 0 || !alive) wave_over(d); }
     else if (alive && d->run_muts && pet->count >= 4 && !d->drafts && (d->wave_cd -= dt) <= 0) {
         static const species_t W[4] = { SP_PHAGE, SP_VIBRIO, SP_PHAGE, SP_MYXO };
