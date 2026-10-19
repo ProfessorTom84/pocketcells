@@ -103,6 +103,7 @@ bool dish_story_line(const dish_t *d, int i, char *out, int n, int *minute) {
         if (v >= 0 && v < M_COUNT) dish_gene_card_name(d, v, card, sizeof card);
         else snprintf(card, sizeof card, "A WIRE");
         if (x > 1) snprintf(out, (size_t)n, "%s'S %s GREW STRONGER: TIER %d.", pet, v < M_COUNT ? MUTS[v].name : "?", x);
+        else if (b >= BODY_CHAIN && b <= BODY_STALK) snprintf(out, (size_t)n, "%s TOOK IN %s. A %s GROWS.", pet, card, dish_gene_body_name(b));
         else snprintf(out, (size_t)n, "%s TOOK IN %s.", pet, card);
         break; }
     case SE_EXTINCT: snprintf(out, (size_t)n, "%s DIED OUT. THE SPORE VAULT STIRRED.", pet); break;

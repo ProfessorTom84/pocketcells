@@ -97,11 +97,12 @@ typedef enum { CS_FREE, CS_LIVE, CS_SPORE, CS_DYING } cell_state_t;
 enum { GS_ALWAYS, GS_LIGHT, GS_FOOD, GS_TOUCH, GS_HURT, GS_KIN, GS_ENERGY, GS_NEAR, GS_COUNT };
 enum { GE_SPINE, GE_PHOTO, GE_TETHER, GE_ENGULF, GE_GLOW, GE_THRUST, GE_STICK, GE_TOXIN, GE_COUNT };
 enum { LOOK_NONE, LOOK_GLASS, LOOK_SLIME, LOOK_FOAM, LOOK_CHLORO, LOOK_SPINE, LOOK_MAW };
+enum { BODY_NONE, BODY_CHAIN, BODY_RING, BODY_STALK };   /* a dose can grow one of these out of a cell */
 enum { AW_STILL, AW_HUNGER, AW_QUIET, AW_GUEST, AW_VAULT, AW_FILM };
 enum { AE_FEED, AE_SPLIT, AE_SWALLOW };   /* a real event from the catch-up, played back on wake */
 #define DISH_GENO_MAX 48
 typedef struct { uint8_t sense, effect, gain, thr; } wire_t;
-typedef struct { uint8_t used, nwire, look; wire_t w[4]; } geno_t;
+typedef struct { uint8_t used, nwire, look, form; wire_t w[4]; } geno_t;
 
 typedef struct {
     float x, y, vx, vy;
@@ -134,6 +135,8 @@ typedef struct {
     uint8_t gid;                      /* genotype id (1-based into dish_t.geno), 0 none */
     uint8_t replay;                   /* a scene actor: not part of the colony, not saved */
     uint8_t hold;                     /* a split caught mid-pinch, finished when the wake scene plays it */
+    uint8_t form;                     /* BODY_*: the silhouette a dose is growing. not saved */
+    float form_t;                     /* 0 just chosen .. 1 grown. the body eases out; it does not pop */
     genome_t g;
 } cell_t;
 
@@ -236,6 +239,8 @@ typedef struct {
     uint8_t catching;                 /* the catch-up is running: no quests, and the first split waits for the scene */
     uint8_t replaying;                /* the wake scene is on: the main loop holds, the scene ticks its actors */
     uint8_t dose;                     /* DOSE_* the open draft will apply */
+    uint8_t dose_form;                /* BODY_* the take in progress will grow */
+    uint8_t offer_form[3];            /* the body on each dealt card */
     uint8_t away_ev_n, away_step, away_held;
     uint8_t away_ev_kind[3];
     float away_ev_x[3], away_ev_y[3], away_ev_ang[3];

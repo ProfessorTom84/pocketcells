@@ -91,9 +91,13 @@ int dish_gene_dose(dish_t *d, int mut, int dose) {
         int t = live[i]; live[i] = live[j]; live[j] = t;
     }
     uint8_t look = d->geno[gid - 1].look;
+    uint8_t form = d->dose_form;
+    if (form > BODY_STALK) form = BODY_NONE;
+    if (form) d->geno[gid - 1].form = form;
     for (int k = 0; k < want; k++) {
         cell_t *c = &d->cell[live[k]];
         c->gid = (uint8_t)gid; c->look = look; c->shimmer_t = 1.7f;
+        if (form) { c->form = form; c->form_t = 0.02f; }   /* the silhouette starts here and grows */
     }
     if (d->strain[DISH_PET].used) d->strain[DISH_PET].wire = (uint8_t)gid;
     return want;
@@ -106,6 +110,14 @@ void dish_gene_card_name(const dish_t *d, int mut, char *out, int n) {
 const char *dish_gene_listens(int mut) {
     if (mut < 0 || mut >= M_COUNT) return "SOMETHING";
     return LISTENS[mut];
+}
+const char *dish_gene_body_name(int form) {
+    switch (form) {
+    case BODY_CHAIN: return "CHAIN";
+    case BODY_RING:  return "RING";
+    case BODY_STALK: return "STALK";
+    default: return "";
+    }
 }
 
 bool dish_swallow(dish_t *d, int pred, int prey) {

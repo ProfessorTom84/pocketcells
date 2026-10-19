@@ -342,7 +342,7 @@ static int selftest_pet(void) {
 #include <SDL.h>
 /* the window: the mouse is the finger, the arrow keys tilt the box. Keys: N lamp, O an outbreak, F 10x time,
  * D fifty DNA to try the unlocks, S save now, X a fresh dish (with the setup), Q quit,
- * B start a split, E stage a swallow, J nine hours away, Y two days away.
+ * B start a split, E stage a swallow, C open a draft, J nine hours away, Y two days away.
  * The dish saves to dish.sav every 30 s. */
 static void save_file(void) {
     static uint8_t buf[DISH_SAVE_MAX];
@@ -409,6 +409,9 @@ static int window(bool fresh) {
                     break;
                 }
                 case SDLK_j: dish_sleep(&dish, 9 * 3600.0f); dish_ui_show_away(&ui, &dish); printf("nine hours away\n"); break;
+                case SDLK_c:
+                    if (!dish.drafts) { dish.drafts = 1; dish.next_draft_gen = dish.strain[DISH_PET].max_gen + DISH_DRAFT_GENS; dish_draft_deal(&dish); printf("a draft\n"); }
+                    break;
                 case SDLK_y: dish_sleep(&dish, 2 * 86400.0f); dish_ui_show_away(&ui, &dish); printf("two days away\n"); break;
             }
         }
@@ -606,15 +609,24 @@ static int selftest_run(void) {
     CHECK(dish.offer[0] != 0xFF && dish.offer[1] != 0xFF && dish.offer[2] != 0xFF && dish.offer[0] != dish.offer[1] && dish.offer[1] != dish.offer[2] && dish.offer[0] != dish.offer[2],
           "a deal was not three different cards (%d %d %d)", dish.offer[0], dish.offer[1], dish.offer[2]);
     int m = dish.offer[1], r0 = dish.strain[DISH_PET].mut[m];
+    int seen_form[4] = { 0 };
+    for (int k = 0; k < 3; k++) if (dish.offer_form[k] <= BODY_STALK) seen_form[dish.offer_form[k]]++;
+    CHECK(seen_form[BODY_CHAIN] == 1 && seen_form[BODY_RING] == 1 && seen_form[BODY_STALK] == 1, "a deal was not a chain, a ring and a stalk");
+    uint8_t plan = dish.offer_form[1];
     tap_hs(HS_DRAFT_1);
     CHECK(dish.strain[DISH_PET].mut[m] == r0 && dish.strain[DISH_PET].wire != 0 && dish.drafts == 0 && dish.offer[0] == 0xFF && ui.page == PAGE_NONE && !dish_ui_paused(&ui), "picking a card did not dose a wire and resume");
     {   bool noted = false; char l[96], name[24]; int mn;
         dish_gene_card_name(&dish, m, name, sizeof name);
         for (int i = 0; i < dish_story_count(&dish) && dish_story_line(&dish, i, l, sizeof l, &mn); i++) if (strstr(l, name)) noted = true;
         CHECK(noted, "the card's name is not in the story");
-        int wired = 0;
-        for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].state == CS_LIVE && dish.cell[i].gid == dish.strain[DISH_PET].wire) wired++;
-        CHECK(wired > 0, "the dose reached no cell"); }
+        int wired = 0, plain = 0;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) {
+            cell_t *c = &dish.cell[i];
+            if (c->state != CS_LIVE || c->strain != DISH_PET) continue;
+            if (c->gid == dish.strain[DISH_PET].wire && c->form == plan && c->form_t < 0.2f) wired++;
+            else if (!c->form) plain++;
+        }
+        CHECK(wired > 0 && plain > 0, "the body did not land on some cells and leave others (%d grew, %d stayed)", wired, plain); }
     /* time away grants at most one */
     dish.strain[DISH_PET].max_gen = 200; dish_sleep(&dish, 3600);
     CHECK(dish.drafts <= 1, "time away left %d drafts waiting", dish.drafts);
@@ -1261,6 +1273,38 @@ static int selftest_delight(void) {
     CHECK(saw_split, "four days away did not live a split before the dark");
     run(&dish, 0.1f, 0, false);
     CHECK(dish.strain[DISH_PET].count == 0 && dish.strain[DISH_PET].extinct_t > 0, "four days away left %d cells (started %d)", dish.strain[DISH_PET].count, lived);
+    /* a body grows. it is not a new sprite on the first frame, and the three plans do not look alike */
+    dish_init(&dish, 7, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);
+    run(&dish, 2, 0, false);
+    int body = -1, kept = -1;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].state == CS_LIVE && dish.cell[i].strain == DISH_PET) {
+        if (body < 0) body = i; else if (kept < 0) { kept = i; break; }
+    }
+    CHECK(body >= 0 && kept >= 0, "no pair of cells to grow a body on");
+    dish.cell[body].div_t = 0; dish.cell[body].born_t = 0; dish.cell[body].gulp_role = 0; dish.cell[body].energy = 0.2f;
+    dish.cell[body].form = BODY_CHAIN; dish.cell[body].form_t = 0.02f;
+    run(&dish, 0.45f, 0, false);
+    CHECK(dish.cell[body].form_t > 0.2f && dish.cell[body].form_t < 0.85f, "the chain did not grow through the middle (t %.2f)", dish.cell[body].form_t);
+    CHECK(dish.cell[kept].form == BODY_NONE, "a cell that was not dosed changed shape");
+    dish.cell[body].div_t = 0; dish.cell[body].born_t = 0; dish.cell[body].gulp_role = 0;
+    dish.cell[body].form_t = 0.04f;
+    memset(fb, 0, sizeof fb); dish_render(&dish, fb, DISH_W);
+    dish.cell[body].form_t = 1;
+    memset(fb2, 0, sizeof fb2); dish_render(&dish, fb2, DISH_W);
+    CHECK(lit_diff(fb, fb2) > 40, "a grown chain looks like a chain that just started");
+    uint16_t *hold = malloc(sizeof fb);
+    CHECK(hold != NULL, "no room to compare bodies");
+    if (hold) {
+        memcpy(hold, fb2, sizeof fb);
+        dish.cell[body].form = BODY_RING;
+        memset(fb2, 0, sizeof fb2); dish_render(&dish, fb2, DISH_W);
+        CHECK(lit_diff(hold, fb2) > 40, "a ring looks like a chain");
+        memcpy(hold, fb2, sizeof fb);
+        dish.cell[body].form = BODY_STALK;
+        memset(fb2, 0, sizeof fb2); dish_render(&dish, fb2, DISH_W);
+        CHECK(lit_diff(hold, fb2) > 40, "a stalk looks like a ring");
+        free(hold);
+    }
     printf("selftest-delight: %s\n", fails ? "FAILED" : "ok");
     return fails ? 1 : 0;
 }

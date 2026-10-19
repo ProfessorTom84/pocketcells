@@ -503,7 +503,7 @@ static void divide(dish_t *d, int i) {
     cell_t *n = &d->cell[j];
     n->energy = c->energy; n->ang = c->ang + dish_rand(d, -0.25f, 0.25f);
     n->gen = parent.gen + 1; n->health = parent.health;
-    n->gid = c->gid; n->look = c->look; n->replay = c->replay;   /* a daughter copies the wire, and a scene actor stays one */
+    n->gid = c->gid; n->look = c->look; n->form = c->form; n->form_t = c->form_t; n->replay = c->replay;   /* a daughter copies the wire and the body */
     c->born_t = n->born_t = 0.92f;
     c->born_dx = ax; c->born_dy = ay; n->born_dx = -ax; n->born_dy = -ay;
     c->twin = (int16_t)j; n->twin = (int16_t)i;
@@ -676,7 +676,7 @@ static void cell_tick(dish_t *d, int i, float dt) {
     /* ---- metabolism, food, the light ---- */
     float comfort, env = dish_stress(d, c, &comfort);
     c->comfort = comfort;
-    bool anchor = is_anchor(c, mu);
+    bool anchor = is_anchor(c, mu) || (c->form == BODY_STALK && c->form_t > 0.55f);
     float metab = sp->metab * (0.6f + 0.4f * c->g.speed * c->g.size) * (strat == ST_REST || anchor ? 0.45f : 1) * (spore ? 0.05f : 1);
     int fc = fidx(c->x, c->y);
     if (!sp->virus) {
@@ -960,6 +960,8 @@ static void cell_tick(dish_t *d, int i, float dt) {
         if (dot > 0) { c->vx -= 2 * dot * nx; c->vy -= 2 * dot * ny; }
         if (cosf(c->ang) * nx + sinf(c->ang) * ny > 0) c->ang = atan2f(-ny, -nx) + dish_rand(d, -1, 1);
     }
+    if (c->form && c->form_t < 1 && !c->gulp_role)
+        c->form_t = fminf(1, c->form_t + dt / 1.35f);   /* a body grows over a little more than a second, split or not */
 }
 
 /* ---- the census, the vault, the minds ---- */
@@ -1051,9 +1053,10 @@ static void strains_tick(dish_t *d, float dt, dish_brain_fn brain) {
                 if (d->run_muts) d->vault_used = 1;
                 seed_colony(d, s, 5, DISH_CX, DISH_CY, 12, &st->vault);
                 if (st->wire && st->wire <= d->geno_n) {
-                    uint8_t look = d->geno[st->wire - 1].look;
+                    uint8_t look = d->geno[st->wire - 1].look, form = d->geno[st->wire - 1].form;
                     for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].strain == s && !d->cell[i].gid) {
                         d->cell[i].gid = st->wire; d->cell[i].look = look;
+                        if (form) { d->cell[i].form = form; d->cell[i].form_t = 0.02f; }
                     }
                 }
                 splat(d->nutr, DISH_CX, DISH_CY, 0.35f, 24, 1.0f);    /* the vault wakes them on a little food */

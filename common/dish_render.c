@@ -360,10 +360,71 @@ static void draw_phage(const view_t *v, const cell_t *c, float clock) {
 
 static const uint8_t NO_MUTS[DISH_MUT_N];
 static void draw_muts(const view_t *v, const cell_t *c, const uint8_t *mu, float x, float y, float r, float a, float dx, float dy, float clock);
+
+/* a body growing out of a point. `grow` is 0 (still the old cell) .. 1 (the new silhouette).
+ * beads and the stalk ease apart; nothing is swapped in fully formed. */
+static void draw_body(const view_t *v, float x, float y, float r, float ang, int form, float grow, float stretch, float clock) {
+    if (grow <= 0.01f || form == BODY_NONE) return;
+    float dx = cosf(ang), dy = sinf(ang), px = -dy, py = dx;
+    float br = fmaxf(2.4f, r * 0.72f);
+    if (form == BODY_CHAIN) {
+        float gap = r * 3.3f * grow * (1 + 0.55f * stretch);
+        float prevx = 0, prevy = 0;
+        for (int i = 0; i < 4; i++) {
+            float open = fminf(1, fmaxf(0, grow * 3.2f - (i - 1) * 0.85f));
+            if (i && open <= 0) continue;
+            float along = (i - 1.5f) * gap;
+            float wob = sinf(clock * 2.2f + i) * r * 0.18f * grow;
+            float bx = x + dx * along + px * wob, by = y + dy * along + py * wob;
+            float rad = br * (i ? (0.35f + 0.65f * open) : 1);
+            if (i && open > 0.05f) v_line(v, prevx, prevy, bx, by, fmaxf(1.5f, rad * 0.34f), 0xFFF6D0, 0.95f * open, 0);
+            v_glow(v, bx, by, rad * 1.45f, 0xFFE9A0, 0.4f * (i ? open : 1));
+            v_disc(v, bx, by, rad, 0x2A1808, 235);
+            v_ring(v, bx, by, rad, fmaxf(1.2f, rad * 0.2f), 0xFFF6D0, 0.95f * (i ? open : 1));
+            if (open > 0.65f && i == 3) draw_eyes(v, bx, by, rad * 0.85f, ang, clock, false);
+            prevx = bx; prevy = by;
+        }
+    } else if (form == BODY_RING) {
+        float rad = r * 3.8f * grow * (1 + 0.25f * stretch);
+        float bead = fmaxf(2.0f, r * 0.5f);
+        float bx0 = 0, by0 = 0, bxp = 0, byp = 0;
+        int n = 6;
+        for (int k = 0; k < n; k++) {
+            float a = ang + k * TAU / n + clock * 0.35f * grow;
+            float bx = x + cosf(a) * rad, by = y + sinf(a) * rad;
+            if (k) v_line(v, bxp, byp, bx, by, fmaxf(1.3f, bead * 0.28f), 0xE4DCFF, 0.9f * grow, 0);
+            else { bx0 = bx; by0 = by; }
+            v_glow(v, bx, by, bead * 1.25f, 0xC8B6FF, 0.45f);
+            v_disc(v, bx, by, bead, 0x140818, 235);
+            v_ring(v, bx, by, bead, fmaxf(1.15f, bead * 0.2f), 0xF0E8FF, 0.95f);
+            if (k == 0 && grow > 0.45f) draw_eyes(v, bx, by, bead * 0.8f, a, clock, false);
+            bxp = bx; byp = by;
+        }
+        if (grow > 0.35f) v_line(v, bxp, byp, bx0, by0, fmaxf(1.3f, bead * 0.28f), 0xE4DCFF, 0.9f * grow, 0);
+    } else if (form == BODY_STALK) {
+        float plate = r * (1.3f + 2.4f * fminf(1, grow * 1.2f));
+        v_line(v, x - plate, y + r * 0.2f, x + plate, y + r * 0.2f, fmaxf(2.6f, r * 0.7f), 0xE8B15A, 0.98f, 0);
+        v_glow(v, x, y + r * 0.2f, plate * 0.65f, 0xE8B15A, 0.28f);
+        float stem = r * 8.2f * grow * (1 + 0.2f * stretch);
+        v_line(v, x, y, x, y - stem, fmaxf(1.8f, r * 0.32f), 0xF6E6C4, 0.98f, 0);
+        float hr = fmaxf(2.2f, r * 1.25f) * fmaxf(0, (grow - 0.32f) / 0.68f);
+        if (hr > 0.6f) {
+            float hy = y - stem;
+            v_glow(v, x, hy, hr * 1.6f, 0xFFE08A, 0.5f);
+            v_disc(v, x, hy, hr, 0x3A2408, 240);
+            v_ring(v, x, hy, hr, fmaxf(1.3f, hr * 0.16f), 0xFFE9B0, 0.98f);
+            draw_eyes(v, x, hy, hr * 0.8f, -1.5708f, clock, hr > r);
+        }
+    }
+}
 static void draw_cell(const view_t *v, float clock, const cell_t *c, const uint8_t *mu) {
     if (c->species == SP_PHAGE) { draw_phage(v, c, clock); return; }
     if (!mu) mu = NO_MUTS;
     float s = v->s, sc = c->show_s < 0.05f ? 1 : c->show_s;
+    float grow = 0;
+    if (c->form && !c->gulp_role && !(c->born_t > 0.05f && c->form_t < 0.45f)) grow = fminf(1, c->form_t);
+    float pre = sc;
+    if (grow > 0.12f) sc *= 1 - 0.88f * grow;          /* the rod eases away as the new body opens, including through a split */
     float pinch = c->div_t > 0 ? fminf(1, c->div_t / DISH_DIV_TIME) : 0;
     if (pinch > 0) sc *= 1.15f + 0.95f * pinch;          /* a split should read from across the dish */
     if (c->born_t > 0.05f) sc *= 1.15f + 0.4f * fminf(1, c->born_t / 0.92f);
@@ -487,6 +548,7 @@ static void draw_cell(const view_t *v, float clock, const cell_t *c, const uint8
         v_glow(v, rx, ry, r * 0.72f, 0xE8FBFF, 0.55f);
         v_line(v, lx, ly, rx, ry, fmaxf(1.4f, r * (0.22f * (1 - pinch) + 0.08f)), 0xFFFFFF, 0.95f, 0);
     }
+    (void)pre;
     if (c->state == CS_DYING) return;
     /* a salt-raised strain grows a thick shell: a second wall just outside the first */
     if (c->g.salt_tol > 0.56f && !spore) {
@@ -644,6 +706,11 @@ static void draw_links(const view_t *v, const dish_t *d) {
         const cell_t *c = &d->cell[i];
         if (c->state != CS_LIVE) continue;
         float x = WX(v, c->x + c->pull_x), y = WY(v, c->y + c->pull_y), r = dish_cell_radius(c) * v->s * (c->show_s < 0.05f ? 1 : c->show_s);
+        if (c->form && !c->gulp_role) {
+            float grow = (c->born_t > 0.05f && c->form_t < 0.45f) ? 0 : fminf(1, c->form_t);
+            float stretch = c->div_t > 0 ? fminf(1, c->div_t / DISH_DIV_TIME) : 0;
+            if (grow > 0.02f) draw_body(v, x, y, dish_cell_radius(c) * v->s, c->ang, c->form, grow, stretch, d->clock);
+        }
         if (c->born_t > 0.08f && c->twin > i && c->twin < DISH_MAX_CELLS) {
             const cell_t *o = &d->cell[c->twin];
             if (o->state != CS_FREE && o->twin == i) {
@@ -837,6 +904,10 @@ void dr_disc(uint16_t *fb, int stride, float x, float y, float r, uint32_t rgb, 
 void dr_ring(uint16_t *fb, int stride, float x, float y, float r, float w, uint32_t rgb, int a) { view_t v = frame_view(fb, stride); v_ring(&v, x, y, r, w, rgb, a / 255.0f); }
 void dr_line(uint16_t *fb, int stride, float x0, float y0, float x1, float y1, float w, uint32_t rgb, int a) { view_t v = frame_view(fb, stride); v_line(&v, x0, y0, x1, y1, w, rgb, 0, a); }
 
+void dr_body_icon(uint16_t *fb, int stride, float x, float y, float r, float ang, int form, float grow, float clock) {
+    view_t v = frame_view(fb, stride);
+    draw_body(&v, x, y, r, ang, form, grow, 0, clock);
+}
 void dr_cell_icon(uint16_t *fb, int stride, species_t sp, const genome_t *g, const uint8_t *mut, float x, float y, float s, float ang, float clock, bool face, float clip_r) {
     cell_t one, *c = &one;                              /* one cell, drawn through the same shader */
     memset(c, 0, sizeof *c);

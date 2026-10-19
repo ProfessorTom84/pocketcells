@@ -459,12 +459,11 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
         for (int k = 0; k < 3; k++)
             if (in_rect(draft_card(k), x, y) && d->offer[k] != 0xFF) {
                 int m = d->offer[k];
+                int form = d->offer_form[k];
                 d->dose = (uint8_t)u->dose;
                 if (!dish_draft_take(d, k)) return;
-                int got = 0;
-                for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].gid) got++;
-                char b[64], name[24]; dish_gene_card_name(d, m, name, sizeof name);
-                snprintf(b, sizeof b, got > 2 ? "%s  SETTLES IN" : "%s  A SPARK", name);
+                char b[64];
+                snprintf(b, sizeof b, "A %s GROWS", dish_gene_body_name(form));
                 u->page = PAGE_NONE;
                 dish_ui_toast(u, b, 3.2f);
                 sfx(u, MUTS[m].rarity == MR_EPIC ? SND_MILESTONE : SND_STAGE_UP, 256, 0);
@@ -889,9 +888,12 @@ static void draw_draft(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st
         dr_round_rect(fb, st, r.x + 1, r.y + 1, r.w - 2, r.h - 2, 11, 0x0A1428, 255);
         dish_gene_card_name(d, m, b, sizeof b);
         text_c(fb, st, cx, r.y + 6, 1, RIM[mi->rarity], b);
-        /* the colony as it is, not as the card would make it: the effect stays sealed */
-        dr_disc(fb, st, cx, r.y + 42, 26, 0x03050A, 255);
-        dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, pet->mut, cx, r.y + 42, 2.0f, -0.3f, u->clock, true, 24);
+        text_c(fb, st, cx, r.y + 18, 1, 0xFFFFFF, dish_gene_body_name(d->offer_form[k]));
+        /* the body, growing in the portrait so the card and the dish agree */
+        dr_disc(fb, st, cx, r.y + 50, 22, 0x03050A, 255);
+        float grow = 0.28f + 0.72f * (0.5f + 0.5f * sinf(u->clock * 1.4f + k));
+        dr_body_icon(fb, st, cx, r.y + 56, 5.5f, -0.4f, d->offer_form[k], grow, u->clock);
+        (void)pet;
         text_c(fb, st, cx, r.y + 78, 1, 0x8FB0D8, "LISTENS FOR");
         text_c(fb, st, cx, r.y + 92, 1, 0xFFFFFF, dish_gene_listens(m));
         text_c(fb, st, cx, r.y + 112, 1, 0x5C7598, "ACTS ON");

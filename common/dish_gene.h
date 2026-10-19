@@ -20,6 +20,7 @@ int  dish_gene_dose(dish_t *d, int mut, int dose);
 /* the card's name (no meaning) and the sense it admits to */
 void dish_gene_card_name(const dish_t *d, int mut, char *out, int n);
 const char *dish_gene_listens(int mut);
+const char *dish_gene_body_name(int form);
 /* start a swallow. the prey stays alive and is drawn in; the predator pulses.
  * false if either cell cannot. */
 bool dish_swallow(dish_t *d, int pred, int prey);
