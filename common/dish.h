@@ -93,6 +93,17 @@ typedef struct {
 
 typedef enum { CS_FREE, CS_LIVE, CS_SPORE, CS_DYING } cell_state_t;
 
+/* wires (dish_gene.c): eight senses, eight effects, and the looks a dose paints on a cell */
+enum { GS_ALWAYS, GS_LIGHT, GS_FOOD, GS_TOUCH, GS_HURT, GS_KIN, GS_ENERGY, GS_NEAR, GS_COUNT };
+enum { GE_SPINE, GE_PHOTO, GE_TETHER, GE_ENGULF, GE_GLOW, GE_THRUST, GE_STICK, GE_TOXIN, GE_COUNT };
+enum { LOOK_NONE, LOOK_GLASS, LOOK_SLIME, LOOK_FOAM, LOOK_CHLORO, LOOK_SPINE, LOOK_MAW };
+enum { BODY_NONE, BODY_CHAIN, BODY_RING, BODY_STALK };   /* a dose can grow one of these out of a cell */
+enum { AW_STILL, AW_HUNGER, AW_QUIET, AW_GUEST, AW_VAULT, AW_FILM };
+enum { AE_FEED, AE_SPLIT, AE_SWALLOW };   /* a real event from the catch-up, played back on wake */
+#define DISH_GENO_MAX 48
+typedef struct { uint8_t sense, effect, gain, thr; } wire_t;
+typedef struct { uint8_t used, nwire, look, form; wire_t w[4]; } geno_t;
+
 typedef struct {
     float x, y, vx, vy;
     float ang, spin;         /* heading (rad) and its rate */
@@ -114,6 +125,18 @@ typedef struct {
     float stun_t;            /* > 0: stunned by a zap - it neither moves nor bites */
     float jet_t;             /* > 0: jetting away; < 0: the jet recharging */
     float hatch_t;           /* a spore from a spore burst: seconds until it hatches */
+    /* a split, a swallow, a dose: drawn, not saved. show_s of 0 means "draw at full size". */
+    float born_t, born_dx, born_dy;   /* > 0: just split or just arrived, separating along (born_dx, born_dy) */
+    float pull_x, pull_y;             /* where to draw it, relative to (x, y): the pinch and the swallow */
+    float gulp_t, shimmer_t, show_s;
+    int16_t twin, gulp_other;         /* the other half of a split, or the other party of a swallow; -1 none */
+    uint8_t gulp_role;                /* 0 none, 1 being swallowed, 2 swallowing, 3 closing in */
+    uint8_t look;                     /* LOOK_* from the dose, drawn on this cell */
+    uint8_t gid;                      /* genotype id (1-based into dish_t.geno), 0 none */
+    uint8_t replay;                   /* a scene actor: not part of the colony, not saved */
+    uint8_t hold;                     /* a split caught mid-pinch, finished when the wake scene plays it */
+    uint8_t form;                     /* BODY_*: the silhouette a dose is growing. not saved */
+    float form_t;                     /* 0 just chosen .. 1 grown. the body eases out; it does not pop */
     genome_t g;
 } cell_t;
 
@@ -139,6 +162,7 @@ typedef struct {
     float wx, wy;            /* an explore waypoint, or where its scouts found food */
     float zap_t, bloom_t;    /* the zap's and the quorum bloom's recharge */
     float decided_t;         /* seconds since its goal last changed (the thought icon's pop-in) */
+    uint8_t wire;            /* genotype id the dose gave this strain (0 none); the vault hands it on */
 } strain_t;
 
 typedef enum { PT_DROP, PT_RIPPLE, PT_SHARD, PT_SPARK, PT_HEART, PT_ZAP } part_kind_t;   /* PT_ZAP: an arc to (vx, vy) */
@@ -205,6 +229,24 @@ typedef struct {
     uint16_t quests_won, waves_won;
     uint32_t hints;               /* first-time hints already shown (dish_ui.c), saved */
     uint8_t demo;                 /* the dish behind the first-run setup: it lives, but earns and asks nothing (not saved) */
+    /* a wire's genotype, shared by every cell that carries the same one (not saved: the verb ranks are) */
+    geno_t geno[DISH_GENO_MAX];
+    uint8_t geno_n;
+    /* what dish_sleep noticed, for the wake-up reveal. not saved. */
+    uint8_t away_n, away_kind[5], away_ghosts, away_guest;
+    float away_sec, away_gx[8], away_gy[8];
+    float wake_cd;                    /* just woke: the colony is on the glass before anyone asks for a chore */
+    float grow_hold;                  /* a body is growing, or just finished: no quest, hint, or marker over it */
+    uint8_t catching;                 /* the catch-up is running: no quests, and the first split waits for the scene */
+    uint8_t replaying;                /* the wake scene is on: the main loop holds, the scene ticks its actors */
+    uint8_t dose;                     /* DOSE_* the open draft will apply */
+    uint8_t dose_form;                /* BODY_* the take in progress will grow */
+    uint8_t offer_form[3];            /* the body on each dealt card */
+    uint8_t away_ev_n, away_step, away_held;
+    uint8_t away_ev_kind[3];
+    float away_ev_x[3], away_ev_y[3], away_ev_ang[3];
+    float away_step_t;
+    int16_t away_actor;
 } dish_t;
 
 typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);
@@ -212,7 +254,11 @@ typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);
 void dish_init(dish_t *d, uint32_t seed, species_t pet, const char *pet_name);
 void dish_new_run(dish_t *d, uint32_t seed, species_t pet, const char *pet_name);   /* a fresh dish that keeps DNA, badges, dex, unlocks */
 void dish_tick(dish_t *d, float dt, dish_brain_fn brain);
-void dish_sleep(dish_t *d, float seconds);              /* time away (asleep, off), lived through in one step */
+void dish_sleep(dish_t *d, float seconds);              /* time away: a lived catch-up, then the long slow dark */
+void dish_away_play(dish_t *d, float dt);               /* play the catch-up's events with the real animations */
+void dish_away_cancel(dish_t *d);                       /* leave the scene; a held split is allowed to finish */
+int  dish_gulping(const dish_t *d);                     /* a swallow is on screen: nothing else should cover it */
+int  dish_body_quiet(const dish_t *d);                  /* a body is growing: quests, hints, and markers wait */
 
 /* strains and cells */
 int  dish_add_strain(dish_t *d, species_t sp, const char *name);

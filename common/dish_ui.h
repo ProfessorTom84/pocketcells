@@ -15,7 +15,7 @@
 
 #include "dish.h"
 
-typedef enum { PAGE_NONE, PAGE_CARD, PAGE_DRAFT, PAGE_DEX, PAGE_BADGES, PAGE_RUNOVER, PAGE_STORY } page_t;
+typedef enum { PAGE_NONE, PAGE_CARD, PAGE_DRAFT, PAGE_DEX, PAGE_BADGES, PAGE_RUNOVER, PAGE_STORY, PAGE_AWAY } page_t;
 
 typedef struct { int8_t strain; uint8_t emoji; uint32_t cell_id; float t, ttl, delay; char text[72]; } dish_bubble_t;
 #define DISH_BUBBLES 5
@@ -35,7 +35,7 @@ typedef struct {
     dish_bubble_t bub[DISH_BUBBLES];
     float chat_cd;
     char info[128]; float info_t; float info_x, info_y;   /* (info_x < 0: no pointer) */
-    float hint_cd;
+    float hint_cd, quiet_t;          /* quiet_t: just woke, no hint panel over the dish */
     int prev_quest, prev_wave;
     float tap_t, tap_x, tap_y;   /* the last tap: how long ago, where (a double-tap is the lamp) */
     /* the story page */
@@ -46,6 +46,8 @@ typedef struct {
     float clock;
     int sel;                     /* the dex's / badges' tile being read, -1 none */
     int setup, starter, name_i;  /* the first-run setup: its page (0 = done), the chosen starter and name */
+    int dose;                    /* DOSE_SPARK / SEED / FLOOD, the bet on the open draft */
+    int away_i; float away_t;    /* which beat of the wake-up reveal, and how far into it */
     /* sounds waiting for the platform (dish_ui_take_sound), and each cue's cooldown */
     int snd_q[8], snd_pitch[8], snd_n;
     float snd_cd[32];
@@ -59,7 +61,8 @@ void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down);   /* c
 void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain);     /* forward dish events here (toasts) */
 void dish_ui_toast(dish_ui_t *u, const char *s, float seconds);
 void dish_ui_begin_setup(dish_ui_t *u);                                     /* a new dish: welcome, pick a starter, name it, tips */
-bool dish_ui_paused(const dish_ui_t *u);                                    /* true: don't tick the dish (a draft waits for its pick) */
+void dish_ui_show_away(dish_ui_t *u, dish_t *d);                            /* play the catch-up's events, if it lived any */
+bool dish_ui_paused(const dish_ui_t *u);                                    /* true: don't tick the dish (a draft, or the wake-up reveal) */
 /* the next sound to play (SND_* from sounds.h, its pitch_q8 in *pitch: 256 = as recorded), -1 when none */
 int  dish_ui_take_sound(dish_ui_t *u, int *pitch);
 /* what a strain is thinking, in words: "BLIP: HUNTING THE VIBRIO  SURE 82%" */

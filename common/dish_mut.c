@@ -1,5 +1,6 @@
 /* dish_mut.c — see dish_mut.h. */
 #include "dish_mut.h"
+#include "dish_gene.h"
 #include "dish_story.h"
 #include <math.h>
 #include <stdio.h>
@@ -90,6 +91,15 @@ void dish_draft_deal(dish_t *d) {
             if (best >= 0) d->offer[2] = (uint8_t)best;
         }
     }
+    /* three different bodies, one on each card, so the pick is a silhouette */
+    uint8_t form[3] = { BODY_CHAIN, BODY_RING, BODY_STALK };
+    for (int i = 2; i > 0; i--) {
+        int j = (int)dish_rand(d, 0, (float)i + 0.999f);
+        if (j < 0) j = 0;
+        if (j > i) j = i;
+        uint8_t t = form[i]; form[i] = form[j]; form[j] = t;
+    }
+    for (int k = 0; k < 3; k++) d->offer_form[k] = form[k];
 }
 
 void dish_mut_take(dish_t *d, int s, int m) {
@@ -100,9 +110,17 @@ void dish_mut_take(dish_t *d, int s, int m) {
 }
 bool dish_draft_take(dish_t *d, int card) {
     if (!d->drafts || card < 0 || card > 2 || d->offer[card] == 0xFF) return false;
-    dish_mut_take(d, DISH_PET, d->offer[card]);
+    int m = d->offer[card];
+    int dose = d->dose > 2 ? 1 : (int)d->dose;
+    int form = d->offer_form[card];
+    d->dose_form = (uint8_t)form;
+    dish_gene_dose(d, m, dose);                       /* the dose carries the wire and grows a body; the old rank stays put */
+    d->dose_form = 0;
+    d->run_muts++;
+    dish_story_note(d, SE_MUT, d->strain[DISH_PET].species, form, m, 0);
     d->drafts = 0;                                    /* (never more than one: the dish waited for this pick) */
     d->offer[0] = d->offer[1] = d->offer[2] = 0xFF;
+    d->offer_form[0] = d->offer_form[1] = d->offer_form[2] = 0;
     return true;
 }
 void dish_mut_preview(const dish_t *d, int m, uint8_t *mut, genome_t *g) {

@@ -80,7 +80,8 @@ static void save_dish(void) {
     nvs_close(h);
 }
 /* true: a dish came back (and lived through the time since, if the clock knows it) */
-static bool load_dish(void) {
+static bool load_dish(float *away_s) {
+    if (away_s) *away_s = 0;
     if (!s_nvs) return false;
     static uint8_t buf[DISH_SAVE_MAX];
     size_t n = sizeof buf; int64_t at = 0;
@@ -92,8 +93,10 @@ static bool load_dish(void) {
     if (!ok || !dish_load(dish, buf, n, (uint32_t)esp_timer_get_time() | 1)) return false;
     int64_t now = clock_port_now_unix();
     if (at > 0 && now > at) {
-        dish_sleep(dish, (float)(now - at));
-        ESP_LOGI(TAG, "the dish lived %.1f h away", (now - at) / 3600.0f);
+        float away = (float)(now - at);
+        dish_sleep(dish, away);
+        if (away_s) *away_s = away;
+        ESP_LOGI(TAG, "the dish lived %.1f h away", away / 3600.0f);
     } else ESP_LOGI(TAG, "no clock across the power-off: the dish resumes where it was");
     return true;
 }
@@ -255,11 +258,15 @@ void app_main(void) {
     }
     dish_ui_init(&ui);
     dish_events_set(on_event, NULL);
-    if (!load_dish()) {
+    float away = 0;
+    if (!load_dish(&away)) {
         dish_init(dish, (uint32_t)esp_timer_get_time() | 1, SP_BACILLUS, "BLIP");
         dish_ui_begin_setup(&ui);
         ESP_LOGI(TAG, "a new dish: the first-run setup");
-    } else ESP_LOGI(TAG, "%s is back: %d strains, DNA %u", dish->strain[DISH_PET].name, DISH_MAX_STRAINS, (unsigned)dish->dna);
+    } else {
+        if (away >= 90) dish_ui_show_away(&ui, dish);   /* the same reveal the sim jumps to with J / Y */
+        ESP_LOGI(TAG, "%s is back: %d strains, DNA %u", dish->strain[DISH_PET].name, DISH_MAX_STRAINS, (unsigned)dish->dna);
+    }
     if (fb[0]) dish_render(dish, fb[0], DISH_W);   /* one whole frame first: the shader's tables and the caches, built by one core */
     s_go = xSemaphoreCreateBinary(); s_done = xSemaphoreCreateBinary();
     ESP_LOGI(TAG, "dish %u B in %s, internal heap %u KB free", (unsigned)sizeof(dish_t),

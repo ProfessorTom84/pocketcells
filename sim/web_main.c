@@ -33,7 +33,7 @@ EMSCRIPTEN_KEEPALIVE void web_init(uint32_t seed, int save_len, float away_s) {
     dish_events_set(on_event, NULL);
     dish_ui_init(&ui);
     if (save_len > 0 && dish_load(&dish, save_buf, (size_t)save_len, seed | 1)) {
-        if (away_s > 0) dish_sleep(&dish, away_s);
+        if (away_s > 0) { dish_sleep(&dish, away_s); if (away_s >= 90) dish_ui_show_away(&ui, &dish); }
     } else {
         dish_init(&dish, seed | 1, SP_BACILLUS, "BLIP");
         dish_ui_begin_setup(&ui);
