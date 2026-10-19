@@ -93,6 +93,15 @@ typedef struct {
 
 typedef enum { CS_FREE, CS_LIVE, CS_SPORE, CS_DYING } cell_state_t;
 
+/* wires (dish_gene.c): eight senses, eight effects, and the looks a dose paints on a cell */
+enum { GS_ALWAYS, GS_LIGHT, GS_FOOD, GS_TOUCH, GS_HURT, GS_KIN, GS_ENERGY, GS_NEAR, GS_COUNT };
+enum { GE_SPINE, GE_PHOTO, GE_TETHER, GE_ENGULF, GE_GLOW, GE_THRUST, GE_STICK, GE_TOXIN, GE_COUNT };
+enum { LOOK_NONE, LOOK_GLASS, LOOK_SLIME, LOOK_FOAM, LOOK_CHLORO, LOOK_SPINE, LOOK_MAW };
+enum { AW_STILL, AW_HUNGER, AW_QUIET, AW_GUEST, AW_VAULT, AW_FILM };
+#define DISH_GENO_MAX 48
+typedef struct { uint8_t sense, effect, gain, thr; } wire_t;
+typedef struct { uint8_t used, nwire, look; wire_t w[4]; } geno_t;
+
 typedef struct {
     float x, y, vx, vy;
     float ang, spin;         /* heading (rad) and its rate */
@@ -114,6 +123,14 @@ typedef struct {
     float stun_t;            /* > 0: stunned by a zap - it neither moves nor bites */
     float jet_t;             /* > 0: jetting away; < 0: the jet recharging */
     float hatch_t;           /* a spore from a spore burst: seconds until it hatches */
+    /* a split, a swallow, a dose: drawn, not saved. show_s of 0 means "draw at full size". */
+    float born_t, born_dx, born_dy;   /* > 0: just split or just arrived, separating along (born_dx, born_dy) */
+    float pull_x, pull_y;             /* where to draw it, relative to (x, y): the pinch and the swallow */
+    float gulp_t, shimmer_t, show_s;
+    int16_t twin, gulp_other;         /* the other half of a split, or the other party of a swallow; -1 none */
+    uint8_t gulp_role;                /* 0 none, 1 being swallowed, 2 swallowing */
+    uint8_t look;                     /* LOOK_* from the dose, drawn on this cell */
+    uint8_t gid;                      /* genotype id (1-based into dish_t.geno), 0 none */
     genome_t g;
 } cell_t;
 
@@ -205,6 +222,12 @@ typedef struct {
     uint16_t quests_won, waves_won;
     uint32_t hints;               /* first-time hints already shown (dish_ui.c), saved */
     uint8_t demo;                 /* the dish behind the first-run setup: it lives, but earns and asks nothing (not saved) */
+    /* a wire's genotype, shared by every cell that carries the same one (not saved: the verb ranks are) */
+    geno_t geno[DISH_GENO_MAX];
+    uint8_t geno_n;
+    /* what dish_sleep noticed, for the wake-up reveal. not saved. */
+    uint8_t away_n, away_kind[5], away_ghosts, away_guest;
+    float away_sec, away_gx[8], away_gy[8];
 } dish_t;
 
 typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);

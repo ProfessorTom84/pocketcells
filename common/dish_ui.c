@@ -1,5 +1,6 @@
 /* dish_ui.c — the pet layer: see dish_ui.h. */
 #include "dish_ui.h"
+#include "dish_gene.h"
 #include "dish_render.h"
 #include "dish_prog.h"
 #include "dish_story.h"
@@ -69,6 +70,10 @@ static rect_t name_next(void) { return (rect_t){ PX + PW - 68, PY + 92, 48, 48 }
 static rect_t name_box(void)  { return (rect_t){ PX + 76, PY + 88, PW - 152, 56 }; }
 /* the draft: three cards across */
 static rect_t draft_card(int k) { int w = (PW - 40) / 3; return (rect_t){ PX + 12 + k * (w + 8), PY + 44, w, 168 }; }
+static rect_t dose_hit(int k) {
+    int w = 78, gap = 8, total = 3 * w + 2 * gap;
+    return (rect_t){ (int)DISH_CX - total / 2 + k * (w + gap), PY + PH - 40, w, 18 };
+}
 void dish_ui_hotspot(hotspot_t h, float *x, float *y) {
     rect_t r;
     switch (h) {
@@ -101,12 +106,17 @@ static void lens_geom(const dish_t *d, int cell, float *cx, float *cy, float *r)
 void dish_ui_init(dish_ui_t *u) {
     memset(u, 0, sizeof *u);
     u->mood = 0.8f; u->lens = -1; u->lens_zoom = 5; u->sel = -1; u->prev_lens = -1; u->tap_t = 9; u->on_button = -1;
+    u->dose = DOSE_SEED;
     u->down_cell = -1; u->wall_i = -1; u->chat_cd = 8; u->hint_cd = 4; u->info_x = -1;
     for (int k = 0; k < DISH_BUBBLES; k++) u->bub[k].strain = -1;
 }
 static void sfx(dish_ui_t *u, int cue, int pitch, float cd);
 void dish_ui_begin_setup(dish_ui_t *u) { u->setup = 1; u->page = PAGE_NONE; u->lens = -1; sfx(u, SND_WELCOME, 256, 0); }
-bool dish_ui_paused(const dish_ui_t *u) { return u->page == PAGE_DRAFT && !u->setup; }
+bool dish_ui_paused(const dish_ui_t *u) { return !u->setup && (u->page == PAGE_DRAFT || u->page == PAGE_AWAY); }
+void dish_ui_show_away(dish_ui_t *u, const dish_t *d) {
+    if (!d || d->away_n < 1 || u->setup) return;
+    u->page = PAGE_AWAY; u->away_i = 0; u->away_t = 0; u->lens = -1;
+}
 /* a sound for the platform; cd > 0: not again for that long (a busy dish must not chatter) */
 static void sfx(dish_ui_t *u, int cue, int pitch, float cd) {
     if (cue < 0 || cue >= 32 || u->snd_cd[cue] > 0 || u->snd_n >= 8) return;
@@ -313,7 +323,7 @@ void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
     const strain_t *pet = &d->strain[DISH_PET];
     if (d->run_over && !u->setup) { u->page = PAGE_RUNOVER; u->lens = -1; }
     /* a draft is due: it fills the screen, and the dish waits for the pick */
-    else if (d->drafts && !u->setup && pet->count > 0 && u->page != PAGE_DRAFT) {
+    else if (d->drafts && !u->setup && pet->count > 0 && u->page != PAGE_DRAFT && u->page != PAGE_AWAY) {
         dish_draft_deal(d);
         if (d->offer[0] != 0xFF) { u->page = PAGE_DRAFT; u->lens = -1; }
         else d->drafts = 0;                          /* (nothing left to offer: a strain at the top tier of everything) */
@@ -336,6 +346,13 @@ void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
     if (u->lens >= 0) {
         const cell_t *c = &d->cell[u->lens];
         if ((c->state != CS_LIVE && c->state != CS_SPORE) || c->id != u->lens_id) u->lens = -1;
+    }
+    if (u->page == PAGE_AWAY) {
+        u->away_t += dt;
+        if (u->away_t > 1.85f) {
+            u->away_t = 0; u->away_i++;
+            if (u->away_i >= d->away_n) u->page = PAGE_NONE;
+        }
     }
     if (u->down) u->press_t += dt;
     /* the bubbles age; the pet speaks its mind now and then, so there is always a voice in the dish */
@@ -432,17 +449,23 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
         else if (in_rect(story_btn(2), x, y)) u->page = PAGE_NONE;
         break;
     case PAGE_DRAFT:                                 /* only a card: there is no LATER */
+        for (int k = 0; k < 3; k++) if (in_rect(dose_hit(k), x, y)) { u->dose = k; sfx(u, SND_TAP, 280, 0); return; }
         for (int k = 0; k < 3; k++)
             if (in_rect(draft_card(k), x, y) && d->offer[k] != 0xFF) {
                 int m = d->offer[k];
                 if (!dish_draft_take(d, k)) return;
-                char b[64], f[40]; dish_form_name(d, DISH_PET, f, sizeof f);
-                snprintf(b, sizeof b, "%s: %s", MUTS[m].name, f);
+                int got = dish_gene_dose(d, m, u->dose);
+                char b[64], name[24]; dish_gene_card_name(d, m, name, sizeof name);
+                snprintf(b, sizeof b, got > 2 ? "%s  SETTLES IN" : "%s  A SPARK", name);
                 u->page = PAGE_NONE;
-                dish_ui_toast(u, b, 4);
+                dish_ui_toast(u, b, 3.2f);
                 sfx(u, MUTS[m].rarity == MR_EPIC ? SND_MILESTONE : SND_STAGE_UP, 256, 0);
                 return;
             }
+        break;
+    case PAGE_AWAY:
+        u->away_t = 0; u->away_i++;
+        if (u->away_i >= d->away_n) u->page = PAGE_NONE;
         break;
     case PAGE_RUNOVER:
         if (in_rect(page_done(), x, y)) { dish_ui_begin_setup(u); u->setup = 2; }   /* NEW RUN: pick a starter */
@@ -844,37 +867,74 @@ static void draw_card(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st)
 }
 static void draw_draft(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     panel(fb, st, PX, PY, PW, PH);
-    char b[40];
+    char b[48];
     text_c(fb, st, DISH_CX, PY + 16, 2, 0xFFFFFF, "EVOLVE: PICK ONE");
-    float p[P_COUNT]; dish_pressures(d, p);
-    int worst = 0; for (int i = 1; i < P_COUNT; i++) if (p[i] > p[worst]) worst = i;
     static const uint32_t RIM[3] = { 0x5C7598, 0x5CE0F0, 0xFF6EF0 };
-    static const char *const RAR[3] = { "COMMON", "RARE", "EPIC" };
+    const strain_t *pet = &d->strain[DISH_PET];
     for (int k = 0; k < 3; k++) {
         int m = d->offer[k];
         if (m == 0xFF) continue;
         rect_t r = draft_card(k);
         const mut_info_t *mi = &MUTS[m];
         float cx = r.x + r.w * 0.5f;
-        int have = d->strain[DISH_PET].mut[m];
         if (mi->rarity == MR_EPIC) dr_glow(fb, st, cx, r.y + r.h * 0.5f, r.w * 0.8f, 0xFF6EF0, (int)(60 + 30 * sinf(u->clock * 3)));
         dr_round_rect(fb, st, r.x - 1, r.y - 1, r.w + 2, r.h + 2, 12, RIM[mi->rarity], 255);
         dr_round_rect(fb, st, r.x + 1, r.y + 1, r.w - 2, r.h - 2, 11, 0x0A1428, 255);
-        text_c(fb, st, cx, r.y + 6, 1, RIM[mi->rarity], have ? "TIER UP" : RAR[mi->rarity]);
-        /* the pet as it would be: its build plus this card */
-        uint8_t mu[DISH_MUT_N]; genome_t g; dish_mut_preview(d, m, mu, &g);
-        dr_disc(fb, st, cx, r.y + 46, 28, 0x03050A, 255);
-        dr_cell_icon(fb, st, (species_t)d->strain[DISH_PET].species, &g, mu, cx, r.y + 46, 2.3f, -0.3f, u->clock, true, 27);
-        int sc = dr_text_w(mi->name, 2) <= r.w - 8 ? 2 : 1;
-        text_c(fb, st, cx, r.y + 82 + (sc == 1 ? 3 : 0), sc, 0xFFFFFF, mi->name);
-        text_wrap(fb, st, cx, r.y + 104, r.w - 8, 0xB8D0EE, mi->says[have < MUT_TIERS ? have : MUT_TIERS - 1]);
-        pips(fb, st, cx, r.y + r.h - 26, have, have);   /* owned tiers, and the bright one this card adds */
-        if (p[worst] >= 0.3f && (mi->answers >> worst & 1)) {
-            snprintf(b, sizeof b, "VS %s", PRESSURE_NAMES[worst]);
-            text_c(fb, st, cx, r.y + r.h - 14, 1, 0x4CF08C, b);
-        }
+        dish_gene_card_name(d, m, b, sizeof b);
+        text_c(fb, st, cx, r.y + 6, 1, RIM[mi->rarity], b);
+        /* the colony as it is, not as the card would make it: the effect stays sealed */
+        dr_disc(fb, st, cx, r.y + 42, 26, 0x03050A, 255);
+        dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, pet->mut, cx, r.y + 42, 2.0f, -0.3f, u->clock, true, 24);
+        text_c(fb, st, cx, r.y + 78, 1, 0x8FB0D8, "LISTENS FOR");
+        text_c(fb, st, cx, r.y + 92, 1, 0xFFFFFF, dish_gene_listens(m));
+        text_c(fb, st, cx, r.y + 112, 1, 0x5C7598, "ACTS ON");
+        for (int q = 0; q < 3; q++) dr_disc(fb, st, cx + (q - 1) * 10, r.y + 128, 2.4f, 0x3A4A68, 255);
+        pips(fb, st, cx, r.y + r.h - 16, pet->mut[m], pet->mut[m]);
     }
-    text_c(fb, st, DISH_CX, PY + PH - 20, 1, 0x8FB0D8, "THE DISH WAITS FOR YOUR PICK");
+    static const char *const DOSE_NAME[3] = { "SPARK", "SEED", "FLOOD" };
+    for (int k = 0; k < 3; k++) {
+        rect_t r = dose_hit(k);
+        bool on = u->dose == k;
+        dr_round_rect(fb, st, r.x, r.y, r.w, r.h, 8, on ? 0x103A30 : 0x101820, 255);
+        text_c(fb, st, r.x + r.w * 0.5f, r.y + 4, 1, on ? 0xB8FFE8 : 0x6A7A98, DOSE_NAME[k]);
+    }
+}
+static void draw_away(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    if (u->away_i < 0 || u->away_i >= d->away_n) return;
+    int kind = d->away_kind[u->away_i];
+    float beat = fminf(1, u->away_t / 1.85f);
+    float fade = beat < 0.15f ? beat / 0.15f : beat > 0.82f ? (1 - beat) / 0.18f : 1;
+    dr_rect(fb, st, 0, 0, DISH_W, DISH_H, 0x000000, (int)(150 * fade));
+    const strain_t *pet = &d->strain[DISH_PET];
+    if (kind == AW_QUIET) {
+        for (int i = 0; i < d->away_ghosts; i++) {
+            float a = (1 - beat) * (0.35f + 0.15f * sinf(u->clock * 3 + i));
+            dr_ring(fb, st, d->away_gx[i], d->away_gy[i], 8 + beat * 16, 1.6f, 0xC8D8F0, (int)(a * 255));
+            dr_glow(fb, st, d->away_gx[i], d->away_gy[i], 18, 0x9FB8D8, (int)(a * 140));
+        }
+    } else if (kind == AW_GUEST) {
+        float x = DISH_CX * 0.4f + beat * DISH_W * 0.7f, y = DISH_CY - 20;
+        genome_t g = dish_species_genome(d->away_guest < SP_COUNT ? (species_t)d->away_guest : SP_SYMBIONT);
+        dr_cell_icon(fb, st, d->away_guest < SP_COUNT ? (species_t)d->away_guest : SP_SYMBIONT, &g, NULL, x, y, 2.2f, 0.4f, u->clock, false, 0);
+    } else if (kind == AW_VAULT) {
+        float k = 0.6f + 0.4f * sinf(u->clock * 3);
+        dr_glow(fb, st, DISH_CX, DISH_CY - 10, 64, dr_hsv(pet->vault.hue, 0.5f, 1), (int)(120 * k * fade));
+        dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, pet->mut, DISH_CX, DISH_CY - 10, 2.6f, 0, u->clock * 0.3f, false, 0);
+    } else if (kind == AW_FILM) {
+        dr_glow(fb, st, DISH_CX, DISH_CY + 30, 80, 0x7CFFB0, (int)(70 * fade));
+    } else if (kind == AW_HUNGER) {
+        dr_glow(fb, st, DISH_CX, DISH_CY - 36, 36, 0xFFC070, (int)(90 * fade));
+    } else {
+        dr_glow(fb, st, DISH_CX, DISH_CY - 20, 50, 0x9FE8FF, (int)(60 * fade));
+    }
+    text_c(fb, st, DISH_CX, (int)(DISH_CY - 78), 1, 0x8FB0D8, "WHILE YOU WERE AWAY");
+    const char *line = "THE DISH KEPT STILL";
+    if (kind == AW_HUNGER) line = "THEY WOKE PECKISH";
+    else if (kind == AW_QUIET) line = "A FEW GREW QUIET";
+    else if (kind == AW_GUEST) line = "A GUEST SLIPPED AWAY";
+    else if (kind == AW_VAULT) line = "THE VAULT KEPT A SPORE";
+    else if (kind == AW_FILM) line = "THE AGAR GREW A FILM";
+    text_c(fb, st, DISH_CX, (int)(DISH_CY + 48), 2, 0xFFFFFF, line);
 }
 /* ---- the story: a journal of what happened, and charts of how it went ---- */
 static void draw_journal(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
@@ -1324,6 +1384,7 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     switch (u->page) {
     case PAGE_CARD: draw_card(u, d, fb, st); break;
     case PAGE_DRAFT: draw_draft(u, d, fb, st); break;
+    case PAGE_AWAY: draw_away(u, d, fb, st); break;
     case PAGE_RUNOVER: draw_runover(u, d, fb, st); break;
     case PAGE_DEX:  draw_dex(u, d, fb, st); break;
     case PAGE_BADGES: draw_badges(u, d, fb, st); break;

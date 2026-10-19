@@ -2,6 +2,7 @@
 #include "dish.h"
 #include "dish_prog.h"
 #include "dish_mut.h"
+#include "dish_gene.h"
 #include "dish_story.h"
 #include "dish_talk.h"
 #include <math.h>
@@ -230,6 +231,7 @@ int dish_spawn(dish_t *d, int strain, float x, float y, const genome_t *g) {
             c->phase = dish_rand(d, 0, TAU);
             c->run_t = dish_rand(d, 0.2f, 1.5f);
             c->id = ++d->next_id; c->comfort = 1;
+            c->twin = c->gulp_other = -1;
             return i;
         }
     return -1;
@@ -391,7 +393,12 @@ int dish_visit(dish_t *d, species_t sp) {
     float a = dish_rand(d, 0, TAU), x = DISH_CX + cosf(a) * DISH_RX, y = DISH_CY + sinf(a) * DISH_RY;
     dish_toward_inside(&x, &y, sp == SP_MOLD ? 8 : 22);           /* in at the glass's edge (the mold stays on it) */
     seed_colony(d, s, N[sp], x, y, sp == SP_MOLD ? 10 : 14, NULL);
-    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].strain == s && d->cell[i].state == CS_LIVE) d->cell[i].energy = 0.8f;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].strain == s && d->cell[i].state == CS_LIVE) {
+        cell_t *c = &d->cell[i];
+        c->energy = 0.8f; c->shimmer_t = 1.6f; c->born_t = 0.75f;
+        float dx = DISH_CX - c->x, dy = DISH_CY - c->y, L = sqrtf(dx * dx + dy * dy) + 1e-3f;
+        c->born_dx = dx / L; c->born_dy = dy / L;   /* drawn out at the rim, then they come in */
+    }
     d->strain[s].stay_t = SPECIES_FRIENDLY[sp] ? dish_rand(d, 300, 420) : dish_rand(d, 360, 540);
     dish_story_note(d, SE_VISIT, sp, 0, 0, 0);
     emit(DEV_VISIT, sp);
@@ -473,21 +480,25 @@ static void kill(dish_t *d, int i, bool burst, int cause) {
 }
 static void divide(dish_t *d, int i) {
     cell_t *c = &d->cell[i];
-    float r = dish_cell_radius(c);
     float ax = cosf(c->ang), ay = sinf(c->ang);
     cell_t parent = *c;
     genome_t g = mutate(d, &parent.g, d->strain[c->strain].strat.id == ST_EXPLORE ? 1.5f : 1.0f);
-    int j = dish_spawn(d, c->strain, c->x + ax * r, c->y + ay * r, &g);
+    int j = dish_spawn(d, c->strain, c->x, c->y, &g);   /* born in the same place: the pinch lets go of two bodies */
     c = &d->cell[i];
     c->div_t = 0;
     if (j < 0) return;                            /* no room for a daughter: the pinch undoes, the energy is kept */
-    c->x -= ax * r * 0.5f; c->y -= ay * r * 0.5f;
     c->energy = parent.energy * 0.45f;
     strain_t *st = &d->strain[c->strain];
     cell_t *n = &d->cell[j];
-    n->energy = c->energy; n->ang = c->ang + dish_rand(d, -0.3f, 0.3f);
+    n->energy = c->energy; n->ang = c->ang + dish_rand(d, -0.25f, 0.25f);
     n->gen = parent.gen + 1; n->health = parent.health;
-    n->vx = ax * 8; n->vy = ay * 8;
+    n->gid = c->gid; n->look = c->look;           /* a daughter copies the wire it was born with */
+    c->born_t = n->born_t = 0.92f;
+    c->born_dx = ax; c->born_dy = ay; n->born_dx = -ax; n->born_dy = -ay;
+    c->twin = (int16_t)j; n->twin = (int16_t)i;
+    c->vx = ax * 6; c->vy = ay * 6; n->vx = -ax * 6; n->vy = -ay * 6;
+    part_add(d, PT_SPARK, c->x, c->y, ax * 10, ay * 10, 0.45f, 0xE8FBFF);
+    part_add(d, PT_SPARK, c->x, c->y, -ax * 10, -ay * 10, 0.45f, 0xE8FBFF);
     st->births++;
     if (n->gen > st->max_gen) st->max_gen = n->gen;
     dish_story_birth(d, c->strain);
@@ -553,10 +564,54 @@ static void cell_tick(dish_t *d, int i, float dt) {
 
     if (c->state == CS_DYING) {
         c->dying_t += dt;
-        if (c->dying_t > 0.5f) c->state = CS_FREE;
+        if (c->dying_t > 0.85f) c->state = CS_FREE;
         return;
     }
+    /* a swallow: the prey is drawn into the body and only then is gone */
+    if (c->gulp_t > 0 && c->gulp_role == 1) {
+        int o = c->gulp_other;
+        c->gulp_t -= dt;
+        if (o >= 0 && o < DISH_MAX_CELLS && d->cell[o].state != CS_FREE) {
+            cell_t *p = &d->cell[o];
+            float k = fminf(1, dt * 5.5f);
+            c->x += (p->x - c->x) * k; c->y += (p->y - c->y) * k;
+            c->pull_x = (p->x - c->x) * 0.45f; c->pull_y = (p->y - c->y) * 0.45f;
+            c->show_s = fmaxf(0.12f, c->gulp_t / 0.82f);
+            c->vx = c->vy = 0;
+            if (c->gulp_t <= 0) {
+                p->energy = fminf(1.1f, p->energy + 0.35f);
+                p->show_s = 1.28f; p->shimmer_t = fmaxf(p->shimmer_t, 0.55f);
+                p->gulp_t = 0; p->gulp_role = 0; p->gulp_other = -1;
+                part_add(d, PT_HEART, p->x, p->y, 0, 0, 0.4f, 0xFFE6A8);
+                c->gulp_role = 0; c->gulp_other = -1;
+                kill(d, i, false, DIE_EATEN);
+            }
+        } else { c->gulp_t = 0; c->gulp_role = 0; c->gulp_other = -1; c->show_s = 0; }
+        return;
+    }
+    if (c->gulp_role == 2 && c->gulp_t > 0) {
+        c->gulp_t -= dt;
+        float ph = fmaxf(0, c->gulp_t / 0.82f);
+        c->show_s = 1.04f + 0.20f * sinf(c->phase * 9) * (1 - ph) + 0.18f * (1 - ph);
+        if (c->gulp_t <= 0) { c->gulp_role = 0; c->gulp_other = -1; }
+    } else if (c->show_s > 1.02f) c->show_s += (1 - c->show_s) * fminf(1, dt * 2.5f);
     float r = dish_cell_radius(c);
+    if (c->born_t > 0) {
+        c->born_t -= dt;
+        if (c->born_t < 0) c->born_t = 0;
+        float k = c->born_t / 0.92f;
+        int tw = c->twin;
+        if (tw >= 0 && tw < DISH_MAX_CELLS && d->cell[tw].state != CS_FREE && d->cell[tw].twin == i) {
+            cell_t *o = &d->cell[tw];
+            float mx = (c->x + o->x) * 0.5f, my = (c->y + o->y) * 0.5f;
+            c->pull_x = (mx - c->x) * k; c->pull_y = (my - c->y) * k;
+        } else {
+            c->pull_x = -c->born_dx * k * r * 2.4f; c->pull_y = -c->born_dy * k * r * 2.4f;
+        }
+        c->x += c->born_dx * 22 * dt; c->y += c->born_dy * 22 * dt;
+        if (c->born_t <= 0) { c->twin = -1; c->pull_x = c->pull_y = 0; }
+    } else if (c->gulp_role != 1) { c->pull_x = c->pull_y = 0; }
+    if (c->shimmer_t > 0) c->shimmer_t -= dt;
     if (c->stun_t > 0) c->stun_t -= dt;
     bool stunned = c->stun_t > 0;
     if (c->jet_t > 0) { c->jet_t -= dt; if (c->jet_t <= 0) c->jet_t = -4.0f + 0.8f * mu[M_JET]; }   /* then it recharges */
@@ -610,6 +665,8 @@ static void cell_tick(dish_t *d, int i, float dt) {
             c->energy += take;
             float photo = sp->photo + 0.005f * mu[M_PHOTO];               /* the light feeds the green ones */
             if (photo > 0) c->energy += photo * comfort * dt * fminf(1.5f, dish_light_at(d, c->x, c->y) * (1 + 0.5f * mu[M_PHOTO]));
+            else if (dish_gene_wants(d, c, GE_PHOTO))                      /* the same meal, from a wire, when the verb is absent */
+                c->energy += 0.04f * comfort * dt * fminf(1.5f, dish_light_at(d, c->x, c->y) * 2);
             d->waste[fc] = clampf(d->waste[fc] + dt * 0.0010f, 0, 1);
             if (c->species == SP_MOLD) d->drug[fc] = fminf(1, d->drug[fc] + 0.08f * dt);        /* the mold's antibiotic */
             if (c->species == SP_SYMBIONT) d->nutr[fc] = fminf(1, d->nutr[fc] + 0.012f * dt);  /* the symbiont's gift */
@@ -738,6 +795,7 @@ static void cell_tick(dish_t *d, int i, float dt) {
                 if (j == i) continue;
                 cell_t *o = &d->cell[j];
                 if (o->state != CS_LIVE && o->state != CS_SPORE) continue;
+                if (o->gulp_role == 1) continue;          /* already going into a mouth */
                 float dx = c->x - o->x, dy = c->y - o->y, dd2 = dx * dx + dy * dy;
                 float rr = body_radius(c) + body_radius(o);
                 bool o_virus = SP[o->species].virus;
@@ -750,19 +808,25 @@ static void cell_tick(dish_t *d, int i, float dt) {
                 if (!other && !o_virus && mu[M_SWARM] && dd < 40) { ax += cosf(o->ang); ay += sinf(o->ang); flock++; }
                 /* the guardian eats free viruses and hunters */
                 if (c->species == SP_CILIATE && (o_virus ? !o->host && other : (o->species == SP_MYXO || o->species == SP_VIBRIO))) {
-                    if (dd < rr * 0.8f + 2) { o->hurt = DIE_EATEN; kill(d, j, false, DIE_EATEN); continue; }
+                    if (dd < rr * 0.8f + 2 && !o_virus) { if (dish_swallow(d, i, j)) continue; }
+                    else if (dd < rr * 0.8f + 2) { o->hurt = DIE_EATEN; kill(d, j, false, DIE_EATEN); continue; }
                     if (dd2 < prey_d) { prey_d = dd2; prey = j; }
                 }
                 if (!sp->virus && !o_virus && other && o->state == CS_LIVE) {
                     const uint8_t *om = d->strain[o->strain].mut;
                     if (touch && om[M_SPIKES]) { c->health -= 0.06f * om[M_SPIKES] * dt; c->hurt = DIE_EATEN; }   /* it touched something spiny */
+                    else if (touch && dish_gene_wants(d, o, GE_SPINE)) { c->health -= 0.06f * dt; c->hurt = DIE_EATEN; }
                     if (mu[M_TOXIN] && !SPECIES_FRIENDLY[o->species] && dd < rr * 2 + 6 * mu[M_TOXIN]) { o->health -= 0.03f * mu[M_TOXIN] * dt; o->hurt = DIE_POISON; }
-                    if (mu[M_ENGULF] && touch && !stunned && (hunting ? aimed : mu[M_ENGULF] >= 3) &&
-                        body_radius(o) < body_radius(c) * (0.9f + 0.15f * mu[M_ENGULF]) && dish_rand(d, 0, 1) < 0.6f * mu[M_ENGULF] * dt) {
-                        kill(d, j, false, DIE_EATEN); c->energy = fminf(1.1f, c->energy + 0.35f);   /* swallowed whole */
-                        continue;
+                    else if (!mu[M_TOXIN] && dish_gene_wants(d, c, GE_TOXIN) && !SPECIES_FRIENDLY[o->species] && dd < rr * 2 + 8) { o->health -= 0.03f * dt; o->hurt = DIE_POISON; }
+                    bool gene_eat = !mu[M_ENGULF] && dish_gene_wants(d, c, GE_ENGULF);
+                    int eat_tier = mu[M_ENGULF] ? mu[M_ENGULF] : (gene_eat ? 1 : 0);
+                    if (eat_tier && touch && !stunned && !c->gulp_role && (hunting ? aimed : eat_tier >= 3 || gene_eat) &&
+                        body_radius(o) < body_radius(c) * (0.9f + 0.15f * eat_tier) && dish_rand(d, 0, 1) < 0.6f * eat_tier * dt) {
+                        if (dish_swallow(d, i, j)) continue;   /* drawn in, not deleted */
                     }
-                    if (mu[M_GRAPPLE] && touch && !c->tether && !SPECIES_FRIENDLY[o->species] && dish_rand(d, 0, 1) < 0.8f * mu[M_GRAPPLE] * dt) c->tether = (uint8_t)(j + 1);
+                    bool gene_hold = !mu[M_GRAPPLE] && dish_gene_wants(d, c, GE_TETHER);
+                    int hold = mu[M_GRAPPLE] ? mu[M_GRAPPLE] : (gene_hold ? 1 : 0);
+                    if (hold && touch && !c->tether && !SPECIES_FRIENDLY[o->species] && dish_rand(d, 0, 1) < 0.8f * hold * dt) c->tether = (uint8_t)(j + 1);
                     if (sp->prey > 0 && hunting && aimed && touch) {             /* a hunter's bite */
                         float bite = sp->prey * bite_k(d, o) * dt;
                         o->health -= bite; o->hurt = DIE_EATEN; c->energy += bite * (c->species == SP_VIBRIO ? 0.5f : 2.0f);
@@ -773,7 +837,9 @@ static void cell_tick(dish_t *d, int i, float dt) {
                 }
                 if (!sp->virus && !o_virus) {
                     if (dd < rr * 2.2f) crowd++;
-                    if (dd < rr) { float push = (rr - dd) / rr * 60; px += dx / dd * push; py += dy / dd * push; }
+                    if (dd < rr && !(c->born_t > 0.12f && (j == c->twin || o->twin == (int16_t)i))) {
+                        float push = (rr - dd) / rr * 60; px += dx / dd * push; py += dy / dd * push;
+                    }
                     else if ((sp->adhesive || mu[M_BIOFILM]) && !other && dd < rr * 1.35f) {
                         float pull = (dd - rr * 1.02f) * 4; px -= dx / dd * pull; py -= dy / dd * pull;
                     }
@@ -800,8 +866,9 @@ static void cell_tick(dish_t *d, int i, float dt) {
         float dx = o->x - c->x, dy = o->y - c->y;
         if (o->state != CS_LIVE || dx * dx + dy * dy > 45 * 45 || stunned) c->tether = 0;
         else {
-            o->health -= 0.06f * mu[M_GRAPPLE] * dt; o->hurt = DIE_EATEN; c->energy += 0.03f * mu[M_GRAPPLE] * dt;
-            float k = (0.5f + 0.3f * mu[M_GRAPPLE]) * dt;
+            int grip = mu[M_GRAPPLE] ? mu[M_GRAPPLE] : 1;
+            o->health -= 0.06f * grip * dt; o->hurt = DIE_EATEN; c->energy += 0.03f * grip * dt;
+            float k = (0.5f + 0.3f * grip) * dt;
             o->x -= dx * k; o->y -= dy * k;
         }
     }
@@ -1217,7 +1284,7 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
         for (int k = 0; k < GENES; k++) g[k] = r_q8(&r, GLO[k], GHI[k]);
         if (ver >= 4) { uint16_t age; r_bytes(&r, &age, 2); c->age = age; }
         c->phase = dish_rand(&nd, 0, TAU); c->run_t = dish_rand(&nd, 0.2f, 1.5f);
-        c->id = ++nd.next_id; c->comfort = 1;
+        c->id = ++nd.next_id; c->comfort = 1; c->twin = c->gulp_other = -1;
         if (!nd.strain[c->strain].used) c->state = CS_FREE;
     }
     if (ver >= 3) {
@@ -1282,17 +1349,30 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
  * nothing divides, a free phage doesn't last. A fed dish sleeps through a
  * night; a few days away and the strain starves - and the vault, as ever,
  * brings it back. ---- */
+static void away_push(dish_t *d, int kind) {
+    if (d->away_n >= 5) return;
+    for (int i = 0; i < d->away_n; i++) if (d->away_kind[i] == kind) return;
+    d->away_kind[d->away_n++] = (uint8_t)kind;
+}
 void dish_sleep(dish_t *d, float seconds) {
     if (seconds <= 0) return;
     float t = fminf(seconds, 30 * 86400.0f);
+    float e0 = 0; int n0 = 0; uint8_t guest = 255; int guests = 0;
+    float stay0[DISH_MAX_STRAINS];
+    for (int s = 0; s < DISH_MAX_STRAINS; s++) stay0[s] = d->strain[s].stay_t;
+    for (int s = 1; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && d->strain[s].count) { guests++; guest = d->strain[s].species; }
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].strain == DISH_PET) { e0 += d->cell[i].energy; n0++; }
+    unsigned deaths0 = d->strain[DISH_PET].deaths;
+    d->away_n = 0; d->away_ghosts = 0; d->away_guest = 255; d->away_sec = t;
     for (int i = 0; i < DISH_MAX_CELLS; i++) {
         cell_t *c = &d->cell[i];
         if (c->state == CS_FREE) continue;
         if (c->state == CS_DYING || SP[c->species].virus) { c->state = CS_FREE; continue; }
         c->energy -= SP[c->species].metab * 0.0015f * t * (c->state == CS_SPORE ? 0.05f : 1);
         if (c->state != CS_SPORE) c->age += t * 0.0015f;   /* (the fridge slows aging as much as hunger) */
-        c->div_t = 0; c->infect = 0;
+        c->div_t = 0; c->infect = 0; c->born_t = 0; c->gulp_t = 0; c->gulp_role = 0; c->twin = c->gulp_other = -1;
         if (c->energy <= 0) {                             /* starved in the dark: no pop, it's just gone in the morning */
+            if (d->away_ghosts < 8) { d->away_gx[d->away_ghosts] = c->x; d->away_gy[d->away_ghosts] = c->y; d->away_ghosts++; }
             c->state = CS_FREE;
             d->strain[c->strain].deaths++;
             splat(d->nutr, c->x, c->y, 0.05f, 10, 1.0f);
@@ -1305,4 +1385,18 @@ void dish_sleep(dish_t *d, float seconds) {
     for (int s = 1; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used) d->strain[s].stay_t -= t;   /* visitors keep their hours while you're away */
     d->warm = 0; d->uv_t = 0; d->scare_t = 0;
     for (int i = 0; i < DISH_MAX_PARTS; i++) d->part[i].used = 0;
+    if (t > 3 * 3600.0f) {
+        for (int c = 0; c < FIELD_N * FIELD_N; c++) if (g_in[c] && d->nutr[c] < 0.07f) d->nutr[c] = fminf(0.07f, d->nutr[c] + 0.02f);
+    }
+    /* the reveal is what this step actually did, in a few beats, not a tally */
+    float e1 = 0; int n1 = 0, pet_live = 0;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].strain == DISH_PET) { e1 += d->cell[i].energy; n1++; pet_live++; }
+    if (d->strain[DISH_PET].deaths > deaths0 || d->away_ghosts) away_push(d, AW_QUIET);
+    if (!pet_live) away_push(d, AW_VAULT);
+    else if (t >= 20 * 60.0f) away_push(d, AW_STILL);
+    if (n0 && n1 && e1 / n1 < e0 / n0 - 0.08f) away_push(d, AW_HUNGER);
+    for (int s = 1; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && stay0[s] > 0 && d->strain[s].stay_t <= 0) { d->away_guest = d->strain[s].species; away_push(d, AW_GUEST); }
+    if (t > 3 * 3600.0f && pet_live) away_push(d, AW_FILM);
+    if (!d->away_n && t >= 60) away_push(d, AW_STILL);
+    (void)guests; (void)guest;
 }
