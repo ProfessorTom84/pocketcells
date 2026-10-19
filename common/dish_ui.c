@@ -350,9 +350,10 @@ void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
         const cell_t *c = &d->cell[u->lens];
         if ((c->state != CS_LIVE && c->state != CS_SPORE) || c->id != u->lens_id) u->lens = -1;
     }
-    if (dish_gulping(d)) {
+    if (dish_gulping(d) || dish_body_quiet(d)) {
         for (int k = 0; k < DISH_BUBBLES; k++) u->bub[k].strain = -1;
-        u->info_t = 0; u->toast_t = 0; if (u->lens >= 0) u->lens = -1;
+        u->info_t = 0; if (u->lens >= 0) u->lens = -1;
+        if (dish_gulping(d)) u->toast_t = 0;
     }
     if (u->page == PAGE_AWAY) {
         u->away_t += dt;
@@ -373,7 +374,7 @@ void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
     }
     if (u->info_t > 0) u->info_t -= dt;
     if (u->quiet_t > 0) u->quiet_t -= dt;
-    if (u->page == PAGE_NONE && !u->setup && pet->count && !dish_gulping(d) && u->quiet_t <= 0) hints_tick(u, d, dt);
+    if (u->page == PAGE_NONE && !u->setup && pet->count && !dish_gulping(d) && !dish_body_quiet(d) && u->quiet_t <= 0) hints_tick(u, d, dt);
     /* a finger held on the agar is light: food blooms under it, and the strains decide what to make of it */
     if (u->down && !u->dragged && !u->walling && u->page == PAGE_NONE && !u->setup && u->on_button < 0 && dish_inside(u->dx0, u->dy0, 4)) {
         u->down_t += dt;
@@ -1348,8 +1349,8 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
         draw_corner(fb, st, BTN_STORY, false, false, 0, u->clock);
         draw_corner(fb, st, BTN_DISH, d->badges_new != 0, false, 0, u->clock);
         draw_corner(fb, st, BTN_WALL, false, u->walling, d->ink, u->clock);
-        if (pet->count && !dish_gulping(d)) draw_banner(u, d, fb, st);
-        if (!dish_gulping(d)) { draw_bubbles(u, d, fb, st); draw_info(u, fb, st); }
+        if (pet->count && !dish_gulping(d) && !dish_body_quiet(d)) draw_banner(u, d, fb, st);
+        if (!dish_gulping(d) && !dish_body_quiet(d)) { draw_bubbles(u, d, fb, st); draw_info(u, fb, st); }
     }
     /* extinct: the vault counts down */
     if (pet->count == 0 && pet->extinct_t > 0) {
@@ -1376,7 +1377,7 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     }
     if (u->setup) draw_setup(u, d, fb, st);
     /* a toast: over the dish, or just under the page when one is up */
-    if (u->toast_t > 0 && u->extinct_show <= 0 && u->page != PAGE_DRAFT && u->page != PAGE_AWAY && !dish_gulping(d)) {
+    if (u->toast_t > 0 && u->extinct_show <= 0 && u->page != PAGE_DRAFT && u->page != PAGE_AWAY && !dish_gulping(d) && !dish_body_quiet(d)) {
         bool paged = u->page != PAGE_NONE || u->setup;
         float a = fminf(1, u->toast_t * 3);
         int sc = dr_text_w(u->toast, 2) + 24 <= DISH_W - 40 ? 2 : 1;

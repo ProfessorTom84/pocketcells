@@ -1142,6 +1142,14 @@ void dish_tick(dish_t *d, float dt, dish_brain_fn brain) {
     if (dt > 0.1f) dt = 0.1f;
     d->clock += dt;
     if (d->wake_cd > 0) d->wake_cd -= dt;
+    {   int growing = 0;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) {
+            const cell_t *c = &d->cell[i];
+            if (c->state == CS_LIVE && c->form && c->form_t > 0 && c->form_t < 0.995f) { growing = 1; break; }
+        }
+        if (growing) d->grow_hold = 1.8f;
+        else if (d->grow_hold > 0) d->grow_hold -= dt;
+    }
     grid_build(d);
     census(d);
     strains_tick(d, dt, brain);
@@ -1432,6 +1440,15 @@ void dish_away_cancel(dish_t *d) {
 }
 int dish_gulping(const dish_t *d) {
     for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state != CS_FREE && d->cell[i].gulp_role) return 1;
+    return 0;
+}
+int dish_body_quiet(const dish_t *d) {
+    if (!d) return 0;
+    if (d->grow_hold > 0) return 1;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) {
+        const cell_t *c = &d->cell[i];
+        if (c->state == CS_LIVE && c->form && c->form_t > 0 && c->form_t < 0.995f) return 1;
+    }
     return 0;
 }
 void dish_away_play(dish_t *d, float dt) {

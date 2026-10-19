@@ -826,7 +826,7 @@ static void draw_world(const view_t *v, const dish_t *d) {
     draw_links(v, d);
     prof(2);
     draw_parts(v, d);
-    if (dish_render_thoughts && v->s == 1 && !v->circ) draw_thoughts(v, d);
+    if (dish_render_thoughts && v->s == 1 && !v->circ && !dish_body_quiet(d)) draw_thoughts(v, d);
     prof(3);
 }
 

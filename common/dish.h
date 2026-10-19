@@ -236,6 +236,7 @@ typedef struct {
     uint8_t away_n, away_kind[5], away_ghosts, away_guest;
     float away_sec, away_gx[8], away_gy[8];
     float wake_cd;                    /* just woke: the colony is on the glass before anyone asks for a chore */
+    float grow_hold;                  /* a body is growing, or just finished: no quest, hint, or marker over it */
     uint8_t catching;                 /* the catch-up is running: no quests, and the first split waits for the scene */
     uint8_t replaying;                /* the wake scene is on: the main loop holds, the scene ticks its actors */
     uint8_t dose;                     /* DOSE_* the open draft will apply */
@@ -257,6 +258,7 @@ void dish_sleep(dish_t *d, float seconds);              /* time away: a lived ca
 void dish_away_play(dish_t *d, float dt);               /* play the catch-up's events with the real animations */
 void dish_away_cancel(dish_t *d);                       /* leave the scene; a held split is allowed to finish */
 int  dish_gulping(const dish_t *d);                     /* a swallow is on screen: nothing else should cover it */
+int  dish_body_quiet(const dish_t *d);                  /* a body is growing: quests, hints, and markers wait */
 
 /* strains and cells */
 int  dish_add_strain(dish_t *d, species_t sp, const char *name);
