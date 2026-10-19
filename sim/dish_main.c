@@ -391,15 +391,21 @@ static int window(bool fresh) {
                     }
                     break;
                 case SDLK_e: {
-                    int pred = -1;
-                    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].state == CS_LIVE && dish.cell[i].strain == DISH_PET && !dish.cell[i].gulp_role) { pred = i; break; }
+                    int pred = -1; float best = 1e9f;
+                    for (int i = 0; i < DISH_MAX_CELLS; i++) {
+                        cell_t *c = &dish.cell[i];
+                        if (c->state != CS_LIVE || c->strain != DISH_PET || c->gulp_role || c->replay) continue;
+                        float dd = (c->x - DISH_CX) * (c->x - DISH_CX) + (c->y - DISH_CY) * (c->y - DISH_CY);
+                        if (dd < best) { best = dd; pred = i; }
+                    }
                     if (pred < 0) break;
-                    int ps = -1;
-                    for (int s = 1; s < DISH_MAX_STRAINS; s++) if (dish.strain[s].used && dish.strain[s].species == SP_COCCUS) ps = s;
-                    if (ps < 0) ps = dish_add_strain(&dish, SP_COCCUS, NULL);
-                    genome_t small = dish_species_genome(SP_COCCUS); small.size = 0.78f;
-                    int prey = ps < 0 ? -1 : dish_spawn(&dish, ps, dish.cell[pred].x + 2, dish.cell[pred].y, &small);
-                    if (prey >= 0) dish_swallow(&dish, pred, prey);
+                    dish.cell[pred].x = DISH_CX - 24; dish.cell[pred].y = DISH_CY + 10; dish.cell[pred].vx = dish.cell[pred].vy = 0;
+                    genome_t small = dish_species_genome(SP_COCCUS); small.size = 1.15f;
+                    int prey = dish_spawn(&dish, DISH_PET, DISH_CX + 28, DISH_CY + 10, &small);
+                    if (prey < 0) break;
+                    dish.cell[prey].species = SP_COCCUS; dish.cell[prey].replay = 1; dish.cell[prey].g.size = 1.15f;
+                    dish.cell[prey].vx = dish.cell[prey].vy = 0;
+                    dish.cell[pred].gulp_role = 3; dish.cell[pred].gulp_other = (int16_t)prey;
                     break;
                 }
                 case SDLK_j: dish_sleep(&dish, 9 * 3600.0f); dish_ui_show_away(&ui, &dish); printf("nine hours away\n"); break;
@@ -601,10 +607,14 @@ static int selftest_run(void) {
           "a deal was not three different cards (%d %d %d)", dish.offer[0], dish.offer[1], dish.offer[2]);
     int m = dish.offer[1], r0 = dish.strain[DISH_PET].mut[m];
     tap_hs(HS_DRAFT_1);
-    CHECK(dish.strain[DISH_PET].mut[m] == r0 + 1 && dish.drafts == 0 && dish.offer[0] == 0xFF && ui.page == PAGE_NONE && !dish_ui_paused(&ui), "picking a card did not apply it and resume");
-    {   bool noted = false; char l[96]; int mn;
-        for (int i = 0; i < dish_story_count(&dish) && dish_story_line(&dish, i, l, sizeof l, &mn); i++) if (strstr(l, MUTS[m].name)) noted = true;
-        CHECK(noted, "the pick is not in the story"); }
+    CHECK(dish.strain[DISH_PET].mut[m] == r0 && dish.strain[DISH_PET].wire != 0 && dish.drafts == 0 && dish.offer[0] == 0xFF && ui.page == PAGE_NONE && !dish_ui_paused(&ui), "picking a card did not dose a wire and resume");
+    {   bool noted = false; char l[96], name[24]; int mn;
+        dish_gene_card_name(&dish, m, name, sizeof name);
+        for (int i = 0; i < dish_story_count(&dish) && dish_story_line(&dish, i, l, sizeof l, &mn); i++) if (strstr(l, name)) noted = true;
+        CHECK(noted, "the card's name is not in the story");
+        int wired = 0;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].state == CS_LIVE && dish.cell[i].gid == dish.strain[DISH_PET].wire) wired++;
+        CHECK(wired > 0, "the dose reached no cell"); }
     /* time away grants at most one */
     dish.strain[DISH_PET].max_gen = 200; dish_sleep(&dish, 3600);
     CHECK(dish.drafts <= 1, "time away left %d drafts waiting", dish.drafts);
@@ -641,11 +651,13 @@ static int selftest_run(void) {
     /* 5. one comeback, then the run is over - and what was earned stays */
     dish.dna = 55; dish.badges |= 1u << BADGE_ZOO; dish.dex |= DEX_SPECIES(SP_MOLD); dish.unlocked |= 1u << UNL_CYANO;
     uint32_t badges = dish.badges, dex = dish.dex, unl = dish.unlocked;
-    int built = dish_mut_total(&dish, DISH_PET);
-    CHECK(dish.run_muts > 0, "(the run has taken mutations, so the vault's one comeback counts)");
+    uint8_t wire = dish.strain[DISH_PET].wire;
+    CHECK(dish.run_muts > 0 && wire, "(the run has taken a wire, so the vault's one comeback counts)");
     kill_pet(); run(&dish, 31.5f, 0, false);
     CHECK(dish.strain[DISH_PET].count > 0 && dish.vault_used && !dish.run_over, "the first extinction did not come back from the vault");
-    CHECK(dish_mut_total(&dish, DISH_PET) == built && built > 0, "the vault lost the build (%d of %d)", dish_mut_total(&dish, DISH_PET), built);
+    int kept = 0;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].state == CS_LIVE && dish.cell[i].strain == DISH_PET && dish.cell[i].gid == wire) kept++;
+    CHECK(dish.strain[DISH_PET].wire == wire && kept > 0, "the vault did not hand the wire on (%d cells)", kept);
     kill_pet(); run(&dish, 2, 0, false);
     CHECK(dish.run_over && ev_count[DEV_RUN_OVER] == 1 && ui.page == PAGE_RUNOVER, "the second extinction did not end the run (page %d)", ui.page);
     uint32_t dna_kept = dish.dna;                                           /* (badges earned during the run add to it) */
@@ -1232,8 +1244,9 @@ static int selftest_delight(void) {
     run(&dish, 30, 5, false);
     int lived = dish.strain[DISH_PET].count;
     dish_sleep(&dish, 9 * 3600);
-    CHECK(dish.strain[DISH_PET].count > 0, "a fed pet did not live through nine hours");
-    CHECK(dish.away_n >= 1, "nine hours away left nothing to show");
+    int saw_feed = 0, saw_split = 0;
+    for (int i = 0; i < dish.away_ev_n; i++) { saw_feed += dish.away_ev_kind[i] == AE_FEED; saw_split += dish.away_ev_kind[i] == AE_SPLIT; }
+    CHECK(saw_feed && saw_split, "nine hours away did not live a feeding and a split");
     dish_ui_show_away(&ui, &dish);
     CHECK(ui.page == PAGE_AWAY && dish_ui_paused(&ui), "the reveal did not take the glass");
     dish_ui_tick(&ui, &dish, 0.2f);
@@ -1243,8 +1256,9 @@ static int selftest_delight(void) {
     run(&dish, 0.1f, 0, false);
     CHECK(dish.strain[DISH_PET].count > 0, "a fed pet did not live through nine hours");
     dish_sleep(&dish, 4 * 86400.0f);
-    int vault = 0; for (int i = 0; i < dish.away_n; i++) vault += dish.away_kind[i] == AW_VAULT;
-    CHECK(vault == 1, "a wiped dish did not keep a spore in the reveal");
+    saw_split = 0;
+    for (int i = 0; i < dish.away_ev_n; i++) saw_split += dish.away_ev_kind[i] == AE_SPLIT;
+    CHECK(saw_split, "four days away did not live a split before the dark");
     run(&dish, 0.1f, 0, false);
     CHECK(dish.strain[DISH_PET].count == 0 && dish.strain[DISH_PET].extinct_t > 0, "four days away left %d cells (started %d)", dish.strain[DISH_PET].count, lived);
     printf("selftest-delight: %s\n", fails ? "FAILED" : "ok");

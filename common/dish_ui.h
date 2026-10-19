@@ -35,7 +35,7 @@ typedef struct {
     dish_bubble_t bub[DISH_BUBBLES];
     float chat_cd;
     char info[128]; float info_t; float info_x, info_y;   /* (info_x < 0: no pointer) */
-    float hint_cd;
+    float hint_cd, quiet_t;          /* quiet_t: just woke, no hint panel over the dish */
     int prev_quest, prev_wave;
     float tap_t, tap_x, tap_y;   /* the last tap: how long ago, where (a double-tap is the lamp) */
     /* the story page */
@@ -61,7 +61,7 @@ void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down);   /* c
 void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain);     /* forward dish events here (toasts) */
 void dish_ui_toast(dish_ui_t *u, const char *s, float seconds);
 void dish_ui_begin_setup(dish_ui_t *u);                                     /* a new dish: welcome, pick a starter, name it, tips */
-void dish_ui_show_away(dish_ui_t *u, const dish_t *d);                      /* the short reveal after dish_sleep, if it noticed anything */
+void dish_ui_show_away(dish_ui_t *u, dish_t *d);                            /* play the catch-up's events, if it lived any */
 bool dish_ui_paused(const dish_ui_t *u);                                    /* true: don't tick the dish (a draft, or the wake-up reveal) */
 /* the next sound to play (SND_* from sounds.h, its pitch_q8 in *pitch: 256 = as recorded), -1 when none */
 int  dish_ui_take_sound(dish_ui_t *u, int *pitch);

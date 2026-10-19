@@ -1,5 +1,6 @@
 /* dish_mut.c — see dish_mut.h. */
 #include "dish_mut.h"
+#include "dish_gene.h"
 #include "dish_story.h"
 #include <math.h>
 #include <stdio.h>
@@ -100,7 +101,11 @@ void dish_mut_take(dish_t *d, int s, int m) {
 }
 bool dish_draft_take(dish_t *d, int card) {
     if (!d->drafts || card < 0 || card > 2 || d->offer[card] == 0xFF) return false;
-    dish_mut_take(d, DISH_PET, d->offer[card]);
+    int m = d->offer[card];
+    int dose = d->dose > 2 ? 1 : (int)d->dose;
+    dish_gene_dose(d, m, dose);                       /* the dose carries the wire; the old rank stays put */
+    d->run_muts++;
+    dish_story_note(d, SE_MUT, d->strain[DISH_PET].species, 0, m, 0);
     d->drafts = 0;                                    /* (never more than one: the dish waited for this pick) */
     d->offer[0] = d->offer[1] = d->offer[2] = 0xFF;
     return true;

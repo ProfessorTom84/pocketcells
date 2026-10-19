@@ -101,6 +101,7 @@ static void wave_over(dish_t *d) {
 }
 
 void dish_quest_tick(dish_t *d, float dt) {
+    if (d->catching || d->wake_cd > 0) return;       /* the hours away, and the moment of waking, are not a chore */
     const strain_t *pet = &d->strain[DISH_PET];
     bool alive = pet->count > 0 && !d->run_over;
     /* the wave */

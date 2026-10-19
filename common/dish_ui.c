@@ -113,9 +113,12 @@ void dish_ui_init(dish_ui_t *u) {
 static void sfx(dish_ui_t *u, int cue, int pitch, float cd);
 void dish_ui_begin_setup(dish_ui_t *u) { u->setup = 1; u->page = PAGE_NONE; u->lens = -1; sfx(u, SND_WELCOME, 256, 0); }
 bool dish_ui_paused(const dish_ui_t *u) { return !u->setup && (u->page == PAGE_DRAFT || u->page == PAGE_AWAY); }
-void dish_ui_show_away(dish_ui_t *u, const dish_t *d) {
-    if (!d || d->away_n < 1 || u->setup) return;
+void dish_ui_show_away(dish_ui_t *u, dish_t *d) {
+    if (!d || d->away_ev_n < 1 || u->setup) return;
+    d->replaying = 1; d->away_step = 0; d->away_step_t = 0; d->away_actor = -1;
     u->page = PAGE_AWAY; u->away_i = 0; u->away_t = 0; u->lens = -1;
+    for (int k = 0; k < DISH_BUBBLES; k++) u->bub[k].strain = -1;
+    u->info_t = 0; u->toast_t = 0;
 }
 /* a sound for the platform; cd > 0: not again for that long (a busy dish must not chatter) */
 static void sfx(dish_ui_t *u, int cue, int pitch, float cd) {
@@ -347,12 +350,14 @@ void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
         const cell_t *c = &d->cell[u->lens];
         if ((c->state != CS_LIVE && c->state != CS_SPORE) || c->id != u->lens_id) u->lens = -1;
     }
+    if (dish_gulping(d)) {
+        for (int k = 0; k < DISH_BUBBLES; k++) u->bub[k].strain = -1;
+        u->info_t = 0; u->toast_t = 0; if (u->lens >= 0) u->lens = -1;
+    }
     if (u->page == PAGE_AWAY) {
         u->away_t += dt;
-        if (u->away_t > 1.85f) {
-            u->away_t = 0; u->away_i++;
-            if (u->away_i >= d->away_n) u->page = PAGE_NONE;
-        }
+        dish_away_play(d, dt);
+        if (!d->replaying || d->away_step >= d->away_ev_n) { dish_away_cancel(d); u->page = PAGE_NONE; u->quiet_t = 4; u->info_t = 0; }
     }
     if (u->down) u->press_t += dt;
     /* the bubbles age; the pet speaks its mind now and then, so there is always a voice in the dish */
@@ -367,7 +372,8 @@ void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
         say_mind(u, d, DISH_PET, pet->strat.target, 0, 0);
     }
     if (u->info_t > 0) u->info_t -= dt;
-    if (u->page == PAGE_NONE && !u->setup && pet->count) hints_tick(u, d, dt);
+    if (u->quiet_t > 0) u->quiet_t -= dt;
+    if (u->page == PAGE_NONE && !u->setup && pet->count && !dish_gulping(d) && u->quiet_t <= 0) hints_tick(u, d, dt);
     /* a finger held on the agar is light: food blooms under it, and the strains decide what to make of it */
     if (u->down && !u->dragged && !u->walling && u->page == PAGE_NONE && !u->setup && u->on_button < 0 && dish_inside(u->dx0, u->dy0, 4)) {
         u->down_t += dt;
@@ -453,8 +459,10 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
         for (int k = 0; k < 3; k++)
             if (in_rect(draft_card(k), x, y) && d->offer[k] != 0xFF) {
                 int m = d->offer[k];
+                d->dose = (uint8_t)u->dose;
                 if (!dish_draft_take(d, k)) return;
-                int got = dish_gene_dose(d, m, u->dose);
+                int got = 0;
+                for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].gid) got++;
                 char b[64], name[24]; dish_gene_card_name(d, m, name, sizeof name);
                 snprintf(b, sizeof b, got > 2 ? "%s  SETTLES IN" : "%s  A SPARK", name);
                 u->page = PAGE_NONE;
@@ -464,8 +472,7 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
             }
         break;
     case PAGE_AWAY:
-        u->away_t = 0; u->away_i++;
-        if (u->away_i >= d->away_n) u->page = PAGE_NONE;
+        dish_away_cancel(d); u->page = PAGE_NONE; u->quiet_t = 4; u->info_t = 0;
         break;
     case PAGE_RUNOVER:
         if (in_rect(page_done(), x, y)) { dish_ui_begin_setup(u); u->setup = 2; }   /* NEW RUN: pick a starter */
@@ -900,41 +907,16 @@ static void draw_draft(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st
     }
 }
 static void draw_away(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
-    if (u->away_i < 0 || u->away_i >= d->away_n) return;
-    int kind = d->away_kind[u->away_i];
-    float beat = fminf(1, u->away_t / 1.85f);
-    float fade = beat < 0.15f ? beat / 0.15f : beat > 0.82f ? (1 - beat) / 0.18f : 1;
-    dr_rect(fb, st, 0, 0, DISH_W, DISH_H, 0x000000, (int)(150 * fade));
-    const strain_t *pet = &d->strain[DISH_PET];
-    if (kind == AW_QUIET) {
-        for (int i = 0; i < d->away_ghosts; i++) {
-            float a = (1 - beat) * (0.35f + 0.15f * sinf(u->clock * 3 + i));
-            dr_ring(fb, st, d->away_gx[i], d->away_gy[i], 8 + beat * 16, 1.6f, 0xC8D8F0, (int)(a * 255));
-            dr_glow(fb, st, d->away_gx[i], d->away_gy[i], 18, 0x9FB8D8, (int)(a * 140));
+    dr_rect(fb, st, 0, 0, DISH_W, DISH_H, 0x000000, 55);
+    if (d->away_step < d->away_ev_n && d->away_ev_kind[d->away_step] == AE_SPLIT && d->away_actor >= 0) {
+        const cell_t *c = &d->cell[d->away_actor];
+        if (c->state != CS_FREE) {
+            float k = 0.55f + 0.45f * sinf(u->clock * 5);
+            dr_glow(fb, st, c->x, c->y, 28, 0xFFFFFF, (int)(50 * k));
+            dr_ring(fb, st, c->x, c->y, dish_cell_radius(c) + 10, 1.4f, 0xFFFFFF, (int)(160 * k));
         }
-    } else if (kind == AW_GUEST) {
-        float x = DISH_CX * 0.4f + beat * DISH_W * 0.7f, y = DISH_CY - 20;
-        genome_t g = dish_species_genome(d->away_guest < SP_COUNT ? (species_t)d->away_guest : SP_SYMBIONT);
-        dr_cell_icon(fb, st, d->away_guest < SP_COUNT ? (species_t)d->away_guest : SP_SYMBIONT, &g, NULL, x, y, 2.2f, 0.4f, u->clock, false, 0);
-    } else if (kind == AW_VAULT) {
-        float k = 0.6f + 0.4f * sinf(u->clock * 3);
-        dr_glow(fb, st, DISH_CX, DISH_CY - 10, 64, dr_hsv(pet->vault.hue, 0.5f, 1), (int)(120 * k * fade));
-        dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, pet->mut, DISH_CX, DISH_CY - 10, 2.6f, 0, u->clock * 0.3f, false, 0);
-    } else if (kind == AW_FILM) {
-        dr_glow(fb, st, DISH_CX, DISH_CY + 30, 80, 0x7CFFB0, (int)(70 * fade));
-    } else if (kind == AW_HUNGER) {
-        dr_glow(fb, st, DISH_CX, DISH_CY - 36, 36, 0xFFC070, (int)(90 * fade));
-    } else {
-        dr_glow(fb, st, DISH_CX, DISH_CY - 20, 50, 0x9FE8FF, (int)(60 * fade));
     }
-    text_c(fb, st, DISH_CX, (int)(DISH_CY - 78), 1, 0x8FB0D8, "WHILE YOU WERE AWAY");
-    const char *line = "THE DISH KEPT STILL";
-    if (kind == AW_HUNGER) line = "THEY WOKE PECKISH";
-    else if (kind == AW_QUIET) line = "A FEW GREW QUIET";
-    else if (kind == AW_GUEST) line = "A GUEST SLIPPED AWAY";
-    else if (kind == AW_VAULT) line = "THE VAULT KEPT A SPORE";
-    else if (kind == AW_FILM) line = "THE AGAR GREW A FILM";
-    text_c(fb, st, DISH_CX, (int)(DISH_CY + 48), 2, 0xFFFFFF, line);
+    if (u->away_t < 1.4f) text_c(fb, st, DISH_CX, 22, 1, 0x8FB0D8, "WHILE YOU WERE AWAY");
 }
 /* ---- the story: a journal of what happened, and charts of how it went ---- */
 static void draw_journal(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
@@ -1364,9 +1346,8 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
         draw_corner(fb, st, BTN_STORY, false, false, 0, u->clock);
         draw_corner(fb, st, BTN_DISH, d->badges_new != 0, false, 0, u->clock);
         draw_corner(fb, st, BTN_WALL, false, u->walling, d->ink, u->clock);
-        if (pet->count) draw_banner(u, d, fb, st);
-        draw_bubbles(u, d, fb, st);
-        draw_info(u, fb, st);
+        if (pet->count && !dish_gulping(d)) draw_banner(u, d, fb, st);
+        if (!dish_gulping(d)) { draw_bubbles(u, d, fb, st); draw_info(u, fb, st); }
     }
     /* extinct: the vault counts down */
     if (pet->count == 0 && pet->extinct_t > 0) {
@@ -1393,7 +1374,7 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     }
     if (u->setup) draw_setup(u, d, fb, st);
     /* a toast: over the dish, or just under the page when one is up */
-    if (u->toast_t > 0 && u->extinct_show <= 0 && u->page != PAGE_DRAFT) {
+    if (u->toast_t > 0 && u->extinct_show <= 0 && u->page != PAGE_DRAFT && u->page != PAGE_AWAY && !dish_gulping(d)) {
         bool paged = u->page != PAGE_NONE || u->setup;
         float a = fminf(1, u->toast_t * 3);
         int sc = dr_text_w(u->toast, 2) + 24 <= DISH_W - 40 ? 2 : 1;

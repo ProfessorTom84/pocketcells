@@ -95,6 +95,7 @@ int dish_gene_dose(dish_t *d, int mut, int dose) {
         cell_t *c = &d->cell[live[k]];
         c->gid = (uint8_t)gid; c->look = look; c->shimmer_t = 1.7f;
     }
+    if (d->strain[DISH_PET].used) d->strain[DISH_PET].wire = (uint8_t)gid;
     return want;
 }
 
@@ -110,11 +111,20 @@ const char *dish_gene_listens(int mut) {
 bool dish_swallow(dish_t *d, int pred, int prey) {
     if (!d || pred < 0 || prey < 0 || pred == prey || pred >= DISH_MAX_CELLS || prey >= DISH_MAX_CELLS) return false;
     cell_t *p = &d->cell[pred], *o = &d->cell[prey];
-    if (p->state != CS_LIVE || o->state != CS_LIVE || p->gulp_role || o->gulp_role) return false;
+    if (p->state != CS_LIVE || o->state != CS_LIVE || o->gulp_role) return false;
+    if (p->gulp_role && p->gulp_role != 3) return false;   /* 3 is closing in: contact starts the swallow */
     if (p->species == SP_PHAGE || o->species == SP_PHAGE) return false;
     p->gulp_role = 2; o->gulp_role = 1;
     p->gulp_other = (int16_t)prey; o->gulp_other = (int16_t)pred;
     p->gulp_t = o->gulp_t = 0.82f;
     p->show_s = 1;
+    if (d->catching && d->away_ev_n < 3) {
+        int seen = 0;
+        for (int i = 0; i < d->away_ev_n; i++) if (d->away_ev_kind[i] == AE_SWALLOW) seen = 1;
+        if (!seen) {
+            int n = d->away_ev_n++;
+            d->away_ev_kind[n] = AE_SWALLOW; d->away_ev_x[n] = p->x; d->away_ev_y[n] = p->y; d->away_ev_ang[n] = p->ang;
+        }
+    }
     return true;
 }

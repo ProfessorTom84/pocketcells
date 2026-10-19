@@ -1,5 +1,6 @@
 /* dish_story.c — see dish_story.h. */
 #include "dish_story.h"
+#include "dish_gene.h"
 #include "dish_mut.h"
 #include "dish_talk.h"
 #include "dish_quest.h"
@@ -97,10 +98,13 @@ bool dish_story_line(const dish_t *d, int i, char *out, int n, int *minute) {
         else if (x == 2) snprintf(out, (size_t)n, "THE %sS SET OUT TO %s %s.", A, verb(v), pet);
         else snprintf(out, (size_t)n, "THE %sS TURNED TO %s THE %sS.", A, verb(v), B);
         break;
-    case SE_MUT:
+    case SE_MUT: {
+        char card[24];
+        if (v >= 0 && v < M_COUNT) dish_gene_card_name(d, v, card, sizeof card);
+        else snprintf(card, sizeof card, "A WIRE");
         if (x > 1) snprintf(out, (size_t)n, "%s'S %s GREW STRONGER: TIER %d.", pet, v < M_COUNT ? MUTS[v].name : "?", x);
-        else snprintf(out, (size_t)n, pick ? "%s EVOLVED %s." : "%s GAINED %s.", pet, v < M_COUNT ? MUTS[v].name : "?");
-        break;
+        else snprintf(out, (size_t)n, "%s TOOK IN %s.", pet, card);
+        break; }
     case SE_EXTINCT: snprintf(out, (size_t)n, "%s DIED OUT. THE SPORE VAULT STIRRED.", pet); break;
     case SE_COMEBACK: snprintf(out, (size_t)n, v ? "%s CAME BACK. NO MORE CHANCES." : "%s CAME BACK FROM THE VAULT.", pet); break;
     case SE_RUN_OVER: snprintf(out, (size_t)n, "THE RUN ENDED AFTER %d GENERATIONS.", x); break;

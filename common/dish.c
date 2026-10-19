@@ -267,6 +267,8 @@ void dish_init(dish_t *d, uint32_t seed, species_t pet, const char *pet_name) {
     d->ink = DISH_WALLS;
     d->quest_cd = 20;                                /* (the first request comes soon) */
     d->wave_cd = dish_rand(d, 240, 330);
+    d->dose = 1;                                     /* SEED: a tap's dose, unless the card says otherwise */
+    d->away_actor = -1;
 }
 void dish_new_run(dish_t *d, uint32_t seed, species_t pet, const char *pet_name) {
     uint32_t dna = d->dna, badges = d->badges, nb = d->badges_new, dex = d->dex, unl = d->unlocked, hints = d->hints; uint16_t run = d->run;
@@ -450,6 +452,7 @@ static void grid_build(const dish_t *d) {
 static void kill(dish_t *d, int i, bool burst, int cause) {
     cell_t *c = &d->cell[i];
     if (c->state == CS_DYING || c->state == CS_FREE) return;
+    if (c->replay) { c->state = CS_FREE; c->gulp_role = 0; return; }
     c->state = CS_DYING; c->dying_t = 0;
     strain_t *st = &d->strain[c->strain];
     if (SP[c->species].virus == SP[st->species].virus) {   /* (a tamed phage fading is no loss of the strain's) */
@@ -483,23 +486,31 @@ static void divide(dish_t *d, int i) {
     float ax = cosf(c->ang), ay = sinf(c->ang);
     cell_t parent = *c;
     genome_t g = mutate(d, &parent.g, d->strain[c->strain].strat.id == ST_EXPLORE ? 1.5f : 1.0f);
+    if (d->catching && !c->replay && !d->away_held) {
+        if (d->away_ev_n < 3) {
+            int n = d->away_ev_n++;
+            d->away_ev_kind[n] = AE_SPLIT; d->away_ev_x[n] = c->x; d->away_ev_y[n] = c->y; d->away_ev_ang[n] = c->ang;
+        }
+        d->away_held = 1; c->hold = 1; c->div_t = 0.12f;   /* this birth waits, pinched, for the wake scene */
+        return;
+    }
     int j = dish_spawn(d, c->strain, c->x, c->y, &g);   /* born in the same place: the pinch lets go of two bodies */
     c = &d->cell[i];
-    c->div_t = 0;
+    c->div_t = 0; c->hold = 0;
     if (j < 0) return;                            /* no room for a daughter: the pinch undoes, the energy is kept */
     c->energy = parent.energy * 0.45f;
     strain_t *st = &d->strain[c->strain];
     cell_t *n = &d->cell[j];
     n->energy = c->energy; n->ang = c->ang + dish_rand(d, -0.25f, 0.25f);
     n->gen = parent.gen + 1; n->health = parent.health;
-    n->gid = c->gid; n->look = c->look;           /* a daughter copies the wire it was born with */
+    n->gid = c->gid; n->look = c->look; n->replay = c->replay;   /* a daughter copies the wire, and a scene actor stays one */
     c->born_t = n->born_t = 0.92f;
     c->born_dx = ax; c->born_dy = ay; n->born_dx = -ax; n->born_dy = -ay;
     c->twin = (int16_t)j; n->twin = (int16_t)i;
     c->vx = ax * 6; c->vy = ay * 6; n->vx = -ax * 6; n->vy = -ay * 6;
     part_add(d, PT_SPARK, c->x, c->y, ax * 10, ay * 10, 0.45f, 0xE8FBFF);
     part_add(d, PT_SPARK, c->x, c->y, -ax * 10, -ay * 10, 0.45f, 0xE8FBFF);
-    st->births++;
+    if (!c->replay) st->births++;
     if (n->gen > st->max_gen) st->max_gen = n->gen;
     dish_story_birth(d, c->strain);
     emit(DEV_DIVIDE, c->strain);
@@ -562,9 +573,21 @@ static void cell_tick(dish_t *d, int i, float dt) {
     if (c->state != CS_SPORE) c->age += dt;      /* spores don't age */
     c->phase += dt * (2.0f + c->g.speed * 3);
 
+    if (c->hold && d->catching) { c->div_t = 0.12f; return; }
+    if (c->hold && !d->catching && !d->replaying) c->hold = 0;
     if (c->state == CS_DYING) {
         c->dying_t += dt;
         if (c->dying_t > 0.85f) c->state = CS_FREE;
+        return;
+    }
+    if (c->gulp_role == 3) {
+        int o = c->gulp_other;
+        if (o < 0 || o >= DISH_MAX_CELLS || d->cell[o].state != CS_LIVE) { c->gulp_role = 0; c->gulp_other = -1; return; }
+        cell_t *p = &d->cell[o];
+        float dx = p->x - c->x, dy = p->y - c->y, dd = sqrtf(dx * dx + dy * dy) + 1e-3f;
+        c->ang = atan2f(dy, dx);
+        if (dd < dish_cell_radius(c) + dish_cell_radius(p) + 1.5f) dish_swallow(d, i, o);
+        else { c->x += dx / dd * 52 * dt; c->y += dy / dd * 52 * dt; c->vx = dx / dd * 52; c->vy = dy / dd * 52; }
         return;
     }
     /* a swallow: the prey is drawn into the body and only then is gone */
@@ -611,6 +634,7 @@ static void cell_tick(dish_t *d, int i, float dt) {
         c->x += c->born_dx * 22 * dt; c->y += c->born_dy * 22 * dt;
         if (c->born_t <= 0) { c->twin = -1; c->pull_x = c->pull_y = 0; }
     } else if (c->gulp_role != 1) { c->pull_x = c->pull_y = 0; }
+    if (c->replay && c->div_t <= 0 && c->born_t <= 0 && !c->gulp_role) { c->vx = c->vy = 0; return; }
     if (c->shimmer_t > 0) c->shimmer_t -= dt;
     if (c->stun_t > 0) c->stun_t -= dt;
     bool stunned = c->stun_t > 0;
@@ -946,7 +970,7 @@ static void census(dish_t *d) {
     d->n_live = 0;
     for (int i = 0; i < DISH_MAX_CELLS; i++) {
         cell_t *c = &d->cell[i];
-        if (c->state == CS_FREE) continue;
+        if (c->state == CS_FREE || c->replay) continue;
         d->n_live++;
         if (c->state == CS_DYING) continue;
         int s = c->strain;
@@ -1026,6 +1050,12 @@ static void strains_tick(dish_t *d, float dt, dish_brain_fn brain) {
                 st->extinct_t = 0;
                 if (d->run_muts) d->vault_used = 1;
                 seed_colony(d, s, 5, DISH_CX, DISH_CY, 12, &st->vault);
+                if (st->wire && st->wire <= d->geno_n) {
+                    uint8_t look = d->geno[st->wire - 1].look;
+                    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].strain == s && !d->cell[i].gid) {
+                        d->cell[i].gid = st->wire; d->cell[i].look = look;
+                    }
+                }
                 splat(d->nutr, DISH_CX, DISH_CY, 0.35f, 24, 1.0f);    /* the vault wakes them on a little food */
                 st->strat = (strat_t){ ST_FORAGE, -1, 5, 1, 0 };
                 dish_story_note(d, SE_COMEBACK, st->species, 0, d->vault_used, 0);
@@ -1108,6 +1138,7 @@ void dish_tick(dish_t *d, float dt, dish_brain_fn brain) {
     if (dt <= 0) return;
     if (dt > 0.1f) dt = 0.1f;
     d->clock += dt;
+    if (d->wake_cd > 0) d->wake_cd -= dt;
     grid_build(d);
     census(d);
     strains_tick(d, dt, brain);
@@ -1344,36 +1375,143 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
     return r.ok;
 }
 
-/* ---- time away: the board asleep or off. The dish lives it through in one
- * step, like a fridge: everything slows right down (metabolism ~1/700),
- * nothing divides, a free phage doesn't last. A fed dish sleeps through a
- * night; a few days away and the strain starves - and the vault, as ever,
- * brings it back. ---- */
-static void away_push(dish_t *d, int kind) {
-    if (d->away_n >= 5) return;
-    for (int i = 0; i < d->away_n; i++) if (d->away_kind[i] == kind) return;
-    d->away_kind[d->away_n++] = (uint8_t)kind;
+/* ---- time away: first a short stretch of real life (food, and the divisions
+ * that food earns), remembered as a few events. Then the long dark, slow,
+ * the way a dish left for days still runs out. The wake scene plays the
+ * events with the same animations as the dish. ---- */
+static void catch_up(dish_t *d) {
+    int pet = -1;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].strain == DISH_PET && !d->cell[i].replay) { pet = i; break; }
+    if (pet < 0) return;
+    d->catching = 1; d->away_ev_n = 0; d->away_held = 0; d->away_step = 0; d->away_actor = -1;
+    cell_t *c = &d->cell[pet];
+    c->energy = 1;
+    dish_feed(d, c->x, c->y, 1.5f);
+    dish_light(d, c->x, c->y, 0.6f);
+    d->away_ev_kind[0] = AE_FEED; d->away_ev_x[0] = c->x; d->away_ev_y[0] = c->y; d->away_ev_ang[0] = 0; d->away_ev_n = 1;
+    for (int step = 0; step < 8 * 30; step++) {
+        if (step && step % 75 == 0) {
+            float x = d->strain[DISH_PET].count ? d->strain[DISH_PET].cx : c->x;
+            float y = d->strain[DISH_PET].count ? d->strain[DISH_PET].cy : c->y;
+            dish_feed(d, x, y, 1.1f);
+            dish_light(d, x, y, 0.35f);
+        }
+        dish_tick(d, 1 / 30.0f, dish_brain_rules);
+    }
+    d->catching = 0; d->beam = 0;
+}
+static int spawn_actor(dish_t *d, species_t sp, float x, float y, float ang) {
+    int i = dish_spawn(d, DISH_PET, x, y, &d->strain[DISH_PET].vault);
+    if (i < 0) return -1;
+    cell_t *c = &d->cell[i];
+    c->replay = 1; c->species = (uint8_t)sp; c->ang = ang; c->energy = 1; c->health = 1; c->hold = 0;
+    return i;
+}
+static void free_replay(dish_t *d) {
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].replay) d->cell[i].state = CS_FREE;
+    d->away_actor = -1;
+}
+static void anim_cell(dish_t *d, int i, float dt) {
+    if (i < 0 || i >= DISH_MAX_CELLS || d->cell[i].state == CS_FREE) return;
+    grid_build(d);
+    cell_tick(d, i, dt);
+    int tw = d->cell[i].twin;
+    if (tw >= 0 && tw < DISH_MAX_CELLS && d->cell[tw].state != CS_FREE) { grid_build(d); cell_tick(d, tw, dt); }
+}
+static int hold_cell(const dish_t *d) {
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].hold && d->cell[i].state == CS_LIVE) return i;
+    return -1;
+}
+void dish_away_cancel(dish_t *d) {
+    free_replay(d);
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].hold) d->cell[i].hold = 0;
+    d->replaying = 0; d->away_step = d->away_ev_n; d->wake_cd = 8;
+}
+int dish_gulping(const dish_t *d) {
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state != CS_FREE && d->cell[i].gulp_role) return 1;
+    return 0;
+}
+void dish_away_play(dish_t *d, float dt) {
+    if (!d->replaying || d->away_step >= d->away_ev_n) { d->replaying = 0; return; }
+    int kind = d->away_ev_kind[d->away_step];
+    float x = d->away_ev_x[d->away_step], y = d->away_ev_y[d->away_step], ang = d->away_ev_ang[d->away_step];
+    d->away_step_t += dt;
+    if (kind == AE_FEED) {
+        if (d->away_step_t < dt * 1.5f) dish_feed(d, x, y, 1.2f);
+        d->beam_x = x; d->beam_y = y; d->beam = fminf(1, d->beam + dt * 1.4f);
+        dish_light(d, x, y, dt);
+        for (int i = 0; i < DISH_MAX_CELLS; i++) {
+            cell_t *c = &d->cell[i];
+            if (c->replay || c->state != CS_LIVE || c->strain != DISH_PET) continue;
+            float dx = x - c->x, dy = y - c->y, dd = sqrtf(dx * dx + dy * dy);
+            if (dd > 8 && dd < 160) { c->x += dx / dd * 16 * dt; c->y += dy / dd * 16 * dt; c->ang = atan2f(dy, dx); }
+        }
+        if (d->away_step_t > 1.7f) { d->beam *= 0.4f; d->away_step++; d->away_step_t = 0; }
+        return;
+    }
+    if (kind == AE_SPLIT) {
+        if (d->away_actor < 0) {
+            int h = hold_cell(d);
+            if (h >= 0) {
+                d->cell[h].hold = 0; d->away_actor = (int16_t)h;
+                float dx = DISH_CX - d->cell[h].x, dy = DISH_CY - d->cell[h].y, dd = sqrtf(dx * dx + dy * dy);
+                if (dd > 70) { d->cell[h].x += dx / dd * 48; d->cell[h].y += dy / dd * 48; }
+            }
+            else {
+                int i = spawn_actor(d, (species_t)d->strain[DISH_PET].species, x, y, ang);
+                if (i >= 0) { d->cell[i].div_t = 0.1f; d->cell[i].energy = 1; d->away_actor = (int16_t)i; }
+            }
+        }
+        if (d->away_actor >= 0) anim_cell(d, d->away_actor, dt);
+        int a = d->away_actor;
+        int done = a < 0 || d->cell[a].state == CS_FREE;
+        if (a >= 0 && d->cell[a].state != CS_FREE) {
+            done = d->cell[a].born_t <= 0 && d->cell[a].div_t <= 0 && d->away_step_t > 0.5f;
+            if (d->cell[a].twin >= 0 && d->cell[a].twin < DISH_MAX_CELLS && d->cell[d->cell[a].twin].born_t > 0) done = 0;
+            if (d->cell[a].born_t > 0 || d->cell[a].div_t > 0) done = 0;
+        }
+        if (d->away_step_t > 4.2f) done = 1;
+        if (done) {
+            if (a >= 0 && d->cell[a].replay) free_replay(d);
+            else d->away_actor = -1;
+            d->away_step++; d->away_step_t = 0;
+        }
+        return;
+    }
+    if (kind == AE_SWALLOW) {
+        if (d->away_actor < 0) {
+            int pred = spawn_actor(d, (species_t)d->strain[DISH_PET].species, x, y, ang);
+            int prey = pred < 0 ? -1 : spawn_actor(d, SP_COCCUS, x + cosf(ang) * 34, y + sinf(ang) * 34, ang + 3.14f);
+            if (pred >= 0 && prey >= 0) {
+                d->cell[prey].g.size = 0.75f;
+                d->cell[pred].gulp_role = 3; d->cell[pred].gulp_other = (int16_t)prey;
+                d->away_actor = (int16_t)pred;
+            }
+        }
+        if (d->away_actor >= 0) anim_cell(d, d->away_actor, dt);
+        int still = 0;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].replay && d->cell[i].gulp_role) still = 1;
+        if ((!still && d->away_step_t > 0.3f) || d->away_step_t > 2.4f) { free_replay(d); d->away_step++; d->away_step_t = 0; }
+        return;
+    }
+    d->away_step++; d->away_step_t = 0;
 }
 void dish_sleep(dish_t *d, float seconds) {
     if (seconds <= 0) return;
     float t = fminf(seconds, 30 * 86400.0f);
-    float e0 = 0; int n0 = 0; uint8_t guest = 255; int guests = 0;
-    float stay0[DISH_MAX_STRAINS];
-    for (int s = 0; s < DISH_MAX_STRAINS; s++) stay0[s] = d->strain[s].stay_t;
-    for (int s = 1; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && d->strain[s].count) { guests++; guest = d->strain[s].species; }
-    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].strain == DISH_PET) { e0 += d->cell[i].energy; n0++; }
-    unsigned deaths0 = d->strain[DISH_PET].deaths;
-    d->away_n = 0; d->away_ghosts = 0; d->away_guest = 255; d->away_sec = t;
+    d->away_ghosts = 0; d->away_guest = 255; d->away_sec = t; d->away_n = 0;
+    catch_up(d);
     for (int i = 0; i < DISH_MAX_CELLS; i++) {
         cell_t *c = &d->cell[i];
-        if (c->state == CS_FREE) continue;
+        if (c->state == CS_FREE || c->replay) continue;
         if (c->state == CS_DYING || SP[c->species].virus) { c->state = CS_FREE; continue; }
         c->energy -= SP[c->species].metab * 0.0015f * t * (c->state == CS_SPORE ? 0.05f : 1);
         if (c->state != CS_SPORE) c->age += t * 0.0015f;   /* (the fridge slows aging as much as hunger) */
-        c->div_t = 0; c->infect = 0; c->born_t = 0; c->gulp_t = 0; c->gulp_role = 0; c->twin = c->gulp_other = -1;
+        if (!c->hold) c->div_t = 0;
+        c->infect = 0; c->born_t = 0; c->gulp_t = 0; if (!c->hold) c->gulp_role = 0; c->twin = c->gulp_other = -1;
         if (c->energy <= 0) {                             /* starved in the dark: no pop, it's just gone in the morning */
             if (d->away_ghosts < 8) { d->away_gx[d->away_ghosts] = c->x; d->away_gy[d->away_ghosts] = c->y; d->away_ghosts++; }
-            c->state = CS_FREE;
+            c->state = CS_FREE; c->hold = 0;
             d->strain[c->strain].deaths++;
             splat(d->nutr, c->x, c->y, 0.05f, 10, 1.0f);
         }
@@ -1388,15 +1526,5 @@ void dish_sleep(dish_t *d, float seconds) {
     if (t > 3 * 3600.0f) {
         for (int c = 0; c < FIELD_N * FIELD_N; c++) if (g_in[c] && d->nutr[c] < 0.07f) d->nutr[c] = fminf(0.07f, d->nutr[c] + 0.02f);
     }
-    /* the reveal is what this step actually did, in a few beats, not a tally */
-    float e1 = 0; int n1 = 0, pet_live = 0;
-    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].state == CS_LIVE && d->cell[i].strain == DISH_PET) { e1 += d->cell[i].energy; n1++; pet_live++; }
-    if (d->strain[DISH_PET].deaths > deaths0 || d->away_ghosts) away_push(d, AW_QUIET);
-    if (!pet_live) away_push(d, AW_VAULT);
-    else if (t >= 20 * 60.0f) away_push(d, AW_STILL);
-    if (n0 && n1 && e1 / n1 < e0 / n0 - 0.08f) away_push(d, AW_HUNGER);
-    for (int s = 1; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && stay0[s] > 0 && d->strain[s].stay_t <= 0) { d->away_guest = d->strain[s].species; away_push(d, AW_GUEST); }
-    if (t > 3 * 3600.0f && pet_live) away_push(d, AW_FILM);
-    if (!d->away_n && t >= 60) away_push(d, AW_STILL);
-    (void)guests; (void)guest;
+    d->away_n = d->away_ev_n; d->away_step = 0; d->away_step_t = 0; d->away_actor = -1;
 }
